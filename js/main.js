@@ -94,16 +94,8 @@ async function main() {
   /* 7 ── Scene */
   const { scene, cam, orbit, tapMesh, domHelper } = await buildScene(THREE, OrbitControls, Sky, renderer);
 
-  /* 8 ── Bloom composer */
+  /* 8 ── (bloom removed — render directly, no glow) */
   let composer = null;
-  if (EffectComposer && RenderPass && UnrealBloomPass) {
-    try {
-      composer = new EffectComposer(renderer);
-      composer.addPass(new RenderPass(scene, cam));
-      const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.35, 0.85);
-      composer.addPass(bloom);
-    } catch(e) { composer=null; }
-  }
 
   /* 9 ── Physics engine (worker-backed, main-thread fallback) */
   const sim = new SimController();
@@ -200,9 +192,9 @@ async function main() {
 
     if (orbit) orbit.update();
 
-    /* Particle renderer */
+    /* Particle renderer (always called — count 0 clears stale geometry) */
     const cv = document.getElementById('c');
-    if (partRenderer && sim.count > 0) {
+    if (partRenderer && sim.snapshot) {
       try { partRenderer.update(sim.count, sim.snapshot, cv.clientWidth, cv.clientHeight); }
       catch(_){}
     }

@@ -133,22 +133,20 @@ export class ParticleRenderer {
     return Math.max(0, Math.min(1, (T - c) / (h - c)));
   }
 
-  /* Write material+heat colour into out (THREE.Color). */
+  /* Write material+heat colour into out (THREE.Color).
+     Heat only nudges the colour slightly — no glow / over-bright values. */
   _color(mt, heat, out) {
     const b = BASE[mt] ?? [1,1,1];
     let r=b[0], g=b[1], bl=b[2];
     if (heat > 0.12) {
-      const t = Math.min(1, (heat - 0.12) / 0.7);
-      // blend toward orange, then white-hot
-      const oR=1.0, oG=0.45, oB=0.12;
+      // subtle shift toward warm (hot) / cool (cold), clamped to [0,1]
+      const t = Math.min(1, (heat - 0.12) / 0.88) * 0.35;
+      const oR=1.0, oG=0.45, oB=0.20;
       r  = r*(1-t)  + oR*t;
       g  = g*(1-t)  + oG*t;
       bl = bl*(1-t) + oB*t;
-      // very hot → push toward white and over 1.0 (bloom)
-      const w = Math.max(0, heat - 0.6) * 1.4;
-      r += w; g += w*0.7; bl += w*0.4;
     }
-    out.setRGB(r, g, bl);
+    out.setRGB(Math.min(1,r), Math.min(1,g), Math.min(1,bl));
     return out;
   }
 
