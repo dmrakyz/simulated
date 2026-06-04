@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#060810">
 <title>FluidCreature</title>
 
+<!-- Import map: bare specifiers → CDN URLs.
+     Must appear before any module script. -->
 <script type="importmap">
 {
   "imports": {
@@ -16,630 +19,126 @@
   }
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;background:#060810;
-  font-family:'Segoe UI',system-ui,sans-serif;color:#fff;touch-action:none}
-
-#app{position:fixed;inset:0;display:grid;
-  grid-template-areas:"tb""cv";
-  grid-template-rows:48px 1fr}
-
-#cv{grid-area:cv;position:relative;overflow:hidden}
-canvas{display:block;width:100%;height:100%}
-
-/* toolbar */
-#tb{grid-area:tb;display:flex;align-items:center;gap:4px;padding:0 10px;
-  background:rgba(6,8,16,0.96);border-bottom:1px solid rgba(255,255,255,0.07);z-index:10}
-#tb h1{font-size:12px;font-weight:800;letter-spacing:.1em;color:#00e5ff;
-  margin-right:8px;white-space:nowrap;flex-shrink:0}
-.mbtn{padding:5px 12px;border:1px solid rgba(255,255,255,0.12);border-radius:6px;
-  background:transparent;color:rgba(255,255,255,0.55);font-size:11px;font-weight:700;
-  letter-spacing:.06em;cursor:pointer;min-height:32px;transition:all .15s;touch-action:manipulation}
-.mbtn:hover{background:rgba(255,255,255,0.06);color:#fff}
-.mbtn.on{background:rgba(0,229,255,0.12);color:#00e5ff;border-color:rgba(0,229,255,0.35)}
-.sp{flex:1}
-.ibtn{width:32px;height:32px;border:1px solid rgba(255,255,255,0.1);border-radius:6px;
-  background:transparent;color:rgba(255,255,255,0.5);font-size:14px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;transition:all .15s;touch-action:manipulation}
-.ibtn:hover{background:rgba(255,255,255,0.07);color:#fff}
-
-/* side panels */
-#lp,#rp{position:absolute;top:0;bottom:0;width:240px;background:rgba(6,8,16,0.94);
-  border:1px solid rgba(255,255,255,0.07);overflow-y:auto;-webkit-overflow-scrolling:touch;
-  padding:12px;font-size:12px;transition:transform .25s;z-index:8}
-#lp{left:0;transform:translateX(-100%)}
-#rp{right:0;transform:translateX(100%)}
-body.lp-open #lp{transform:none}
-body.rp-open #rp{transform:none}
-
-@media(min-width:900px) and (orientation:landscape){
-  body.desk #lp{transform:none}
-  body.desk #rp{transform:none}
-}
-
-.ptitle{font-size:10px;font-weight:700;letter-spacing:.12em;color:rgba(255,255,255,0.35);
-  text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;
-  border-bottom:1px solid rgba(255,255,255,0.07)}
-
-/* material buttons */
-.mfbtn{width:100%;padding:7px 10px;margin-bottom:5px;border:1px solid rgba(255,255,255,0.1);
-  border-radius:6px;background:transparent;color:rgba(255,255,255,0.7);font-size:11px;
-  cursor:pointer;text-align:left;display:flex;align-items:center;gap:8px;transition:all .15s;
-  touch-action:manipulation}
-.mfbtn:hover{background:rgba(255,255,255,0.05)}
-.mfbtn.on{background:rgba(0,229,255,0.08);border-color:rgba(0,229,255,0.25);color:#00e5ff}
-.sw{width:13px;height:13px;border-radius:3px;flex-shrink:0}
-
-/* hud */
-#hud{position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.45);
-  border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:5px 9px;
-  font-size:10px;font-family:monospace;color:rgba(255,255,255,0.6);pointer-events:none;
-  line-height:1.7;z-index:20}
-#hud span{color:#00e5ff}
-
-/* fab buttons */
-.fab{position:absolute;bottom:16px;border-radius:22px;background:rgba(0,229,255,0.1);
-  border:1px solid rgba(0,229,255,0.3);color:#00e5ff;font-size:12px;font-weight:700;
-  cursor:pointer;z-index:30;touch-action:manipulation;padding:9px 15px}
-.fab:active{background:rgba(0,229,255,0.25)}
-#fab-spawn{right:16px}
-#fab-panel{left:16px;padding:9px 13px;font-size:16px}
-
-/* loading */
-#ld{position:fixed;inset:0;background:#060810;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;z-index:200;gap:14px;transition:opacity .5s}
-#ld h2{font-size:20px;color:#00e5ff;letter-spacing:.12em}
-.spin{width:36px;height:36px;border:3px solid rgba(0,229,255,0.15);
-  border-top-color:#00e5ff;border-radius:50%;animation:sp .75s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
-#ld p{font-size:11px;color:rgba(255,255,255,0.35)}
-
-/* lil-gui dark override */
-.lil-gui{
-  --background-color:transparent!important;
-  --title-background-color:transparent!important;
-  --widget-color:rgba(255,255,255,0.07)!important;
-  --hover-color:rgba(255,255,255,0.1)!important;
-  --focus-color:rgba(0,229,255,0.15)!important;
-  --number-color:#00e5ff!important;
-  --font-size:11px!important;
-  --input-font-size:11px!important;
-}
-.lil-gui .title{color:rgba(255,255,255,0.35)!important;font-size:10px!important}
-.lil-gui .controller{color:rgba(255,255,255,0.65)!important}
-
-/* tooltip (spawn hint) */
-#hint{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);
-  background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.1);border-radius:8px;
-  padding:6px 14px;font-size:11px;color:rgba(255,255,255,0.5);pointer-events:none;
-  z-index:25;white-space:nowrap;opacity:1;transition:opacity 1s}
-</style>
+<link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
+<!-- ══ Loading Screen ══════════════════════════════════════════ -->
 <div id="ld">
-  <div class="spin"></div>
-  <h2>FLUIDCREATURE</h2>
-  <p>Initializing simulation…</p>
+  <div id="ld-inner">
+    <div class="spin"></div>
+    <h2>FLUIDCREATURE</h2>
+
+    <!-- Step-by-step load log -->
+    <div id="ld-steps">
+      <div class="ld-step done">
+        <span class="ld-icon">✓</span>
+        <span class="ld-msg">DOM ready</span>
+      </div>
+    </div>
+  </div>
 </div>
 
+<!-- ══ Error / Console Panel (always in DOM) ═══════════════════ -->
+<div id="err-panel">
+  <div id="err-header">
+    <span id="err-title">⚠ Console</span>
+    <span id="err-badge">0</span>
+    <div style="flex:1"></div>
+    <button class="err-hbtn" id="err-copy-btn">Copy All</button>
+    <button class="err-hbtn" id="err-clear-btn">Clear</button>
+    <button class="err-hbtn" id="err-close-btn">✕</button>
+  </div>
+  <div id="err-list"></div>
+</div>
+
+<!-- ══ Main App ════════════════════════════════════════════════ -->
 <div id="app">
+
+  <!-- Toolbar -->
   <div id="tb">
     <h1>⬡ FC</h1>
     <button class="mbtn on" data-mode="world">WORLD</button>
-    <button class="mbtn" data-mode="build">BUILD</button>
-    <button class="mbtn" data-mode="simulate">SIMULATE</button>
+    <button class="mbtn"    data-mode="build">BUILD</button>
+    <button class="mbtn"    data-mode="simulate">SIMULATE</button>
     <div class="sp"></div>
-    <button class="ibtn" id="btn-rp" title="Properties">⚙</button>
+    <!-- Console panel toggle; turns red when errors exist -->
+    <button class="ibtn" id="err-open-btn" data-has-error="false" title="Console / Errors">⚑</button>
+    <button class="ibtn" id="btn-rp"       title="Properties">⚙</button>
   </div>
 
+  <!-- Canvas viewport -->
   <div id="cv">
     <canvas id="c"></canvas>
 
+    <!-- HUD overlay -->
     <div id="hud">
       FPS: <span id="hfps">--</span><br>
       Particles: <span id="hpc">0</span><br>
       Material: <span id="hmat">Water</span>
     </div>
 
+    <!-- FAB buttons -->
     <button class="fab" id="fab-panel">☰</button>
     <button class="fab" id="fab-spawn">＋ Spawn</button>
-    <div id="hint">Tap the world to pour material</div>
+
+    <!-- Transient hint -->
+    <div id="hint">Tap the world to pour · long-press to open palette</div>
   </div>
 
+  <!-- Left panel: materials + spawn size -->
   <div id="lp">
     <div class="ptitle">Materials</div>
-    <button class="mfbtn on" data-m="0"><div class="sw" style="background:#2288ff"></div>Water</button>
-    <button class="mfbtn" data-m="1"><div class="sw" style="background:#ddbb55"></div>Sand</button>
-    <button class="mfbtn" data-m="2"><div class="sw" style="background:#ff5500"></div>Lava</button>
-    <button class="mfbtn" data-m="3"><div class="sw" style="background:#ddeeff"></div>Snow</button>
-    <button class="mfbtn" data-m="4"><div class="sw" style="background:#ffbb22"></div>Honey</button>
+
+    <button class="mfbtn on" data-m="0">
+      <div class="sw" style="background:#2288ff"></div>Water
+    </button>
+    <button class="mfbtn" data-m="1">
+      <div class="sw" style="background:#ddbb55"></div>Sand
+    </button>
+    <button class="mfbtn" data-m="2">
+      <div class="sw" style="background:#ff5500"></div>Lava
+    </button>
+    <button class="mfbtn" data-m="3">
+      <div class="sw" style="background:#ddeeff"></div>Snow
+    </button>
+    <button class="mfbtn" data-m="4">
+      <div class="sw" style="background:#ffbb22"></div>Honey
+    </button>
+    <button class="mfbtn" data-m="5">
+      <div class="sw" style="background:#7a5c3a"></div>Mud
+    </button>
+    <button class="mfbtn" data-m="6">
+      <div class="sw" style="background:#334422"></div>Oil
+    </button>
+    <button class="mfbtn" data-m="7">
+      <div class="sw" style="background:#aaddff"></div>Ice
+    </button>
+
     <div class="ptitle" style="margin-top:16px">Spawn Size</div>
-    <input type="range" id="spawn-size" min="1" max="5" step="0.5" value="2.5"
-      style="width:100%;margin-top:4px;accent-color:#00e5ff">
-    <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:4px">
-      Size: <span id="size-label">2.5</span>m
+    <input type="range" id="spawn-size" min="0.5" max="4" step="0.25" value="1.5">
+    <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px">
+      Size: <span id="size-label">1.5</span> m
     </div>
   </div>
 
+  <!-- Right panel: properties GUI mount -->
   <div id="rp">
     <div class="ptitle">Simulation</div>
     <div id="gui-root"></div>
   </div>
-</div>
 
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Sky } from 'three/addons/objects/Sky.js';
-import GUI from 'lil-gui';
+</div><!-- #app -->
 
-// ═══════════════════════════════════════════════════════════════
-// 1. CONSTANTS
-// ═══════════════════════════════════════════════════════════════
-const N   = 32;
-const DX  = 0.5;
-const INV = 1 / DX;
-const N2  = N * N;
-const N3  = N * N * N;
-const DOM = N * DX;       // 16 m domain
-const MAX = 12000;
+<!-- ══ Scripts ══════════════════════════════════════════════════
+     error-panel.js: regular script (not module) — runs immediately,
+     sets up window.ErrPanel and global error interceptors BEFORE
+     any module code runs.                                        -->
+<script src="js/error-panel.js"></script>
 
-// Per-substep dt; 8 substeps per frame → ~0.002s each at 60fps
-const SUB = 8;
-const DT  = 1 / 60 / SUB;
+<!-- Main entry point (ES module, deferred by default) -->
+<script type="module" src="js/main.js"></script>
 
-const M_WATER = 0, M_SAND = 1, M_LAVA = 2, M_SNOW = 3, M_HONEY = 4;
-
-// [bulk_k, density, viscDamp, colorHex]
-// bulk_k: pressure stiffness (weakly compressible EOS)
-// viscDamp: per-step velocity scale in grid (1=none, 0.97=damped)
-const MAT = [
-  { k: 80,  rho: 1000, damp: 1.00, col: 0x2288ff, name:'Water' },
-  { k: 5,   rho: 1650, damp: 0.97, col: 0xddbb55, name:'Sand'  },
-  { k: 140, rho: 2700, damp: 0.99, col: 0xff5500, name:'Lava'  },
-  { k: 25,  rho: 400,  damp: 0.99, col: 0xddeeff, name:'Snow'  },
-  { k: 70,  rho: 1400, damp: 0.97, col: 0xffbb22, name:'Honey' },
-];
-
-// ═══════════════════════════════════════════════════════════════
-// 2. MPM STATE
-// ═══════════════════════════════════════════════════════════════
-const px  = new Float32Array(MAX);
-const py  = new Float32Array(MAX);
-const pz  = new Float32Array(MAX);
-const pvx = new Float32Array(MAX);
-const pvy = new Float32Array(MAX);
-const pvz = new Float32Array(MAX);
-const pC  = new Float32Array(MAX * 9); // APIC affine 3×3
-const pJ  = new Float32Array(MAX).fill(1);
-const pMt = new Uint8Array(MAX);
-let   nP  = 0;
-
-// Grid SoA
-const gM  = new Float32Array(N3);
-const gVx = new Float32Array(N3);
-const gVy = new Float32Array(N3);
-const gVz = new Float32Array(N3);
-
-// Scratch per-substep stress scale per particle (precomputed in P2G)
-let gravity = -9.8;
-
-// ═══════════════════════════════════════════════════════════════
-// 3. MPM STEP  (MLS-MPM, quadratic B-spline)
-// ═══════════════════════════════════════════════════════════════
-function mpmStep() {
-  // ── Reset grid ──────────────────────────────────────────────
-  gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0);
-
-  // ── P2G ─────────────────────────────────────────────────────
-  for (let p = 0; p < nP; p++) {
-    const mt = pMt[p];
-    const m  = MAT[mt];
-    const J  = pJ[p];
-    // Kirchhoff stress scale: -dt * Vp * 4/dx² * k * (J-1)
-    // Vp = 1/rho (normalized per unit mass); sign: negative when J<1 (compressed) → positive pressure
-    const ss = -DT * (1 / m.rho) * 4 * INV * INV * m.k * (J - 1);
-
-    const xp = px[p], yp = py[p], zp = pz[p];
-    const bx = (xp * INV - 0.5) | 0;
-    const by = (yp * INV - 0.5) | 0;
-    const bz = (zp * INV - 0.5) | 0;
-    const fx = xp * INV - bx;
-    const fy = yp * INV - by;
-    const fz = zp * INV - bz;
-
-    // Quadratic B-spline weights (3 per axis)
-    const wx0 = .5*(1.5-fx)*(1.5-fx), wx1 = .75-(fx-1)*(fx-1), wx2 = .5*(fx-.5)*(fx-.5);
-    const wy0 = .5*(1.5-fy)*(1.5-fy), wy1 = .75-(fy-1)*(fy-1), wy2 = .5*(fy-.5)*(fy-.5);
-    const wz0 = .5*(1.5-fz)*(1.5-fz), wz1 = .75-(fz-1)*(fz-1), wz2 = .5*(fz-.5)*(fz-.5);
-
-    const Co = p * 9;
-    const vx = pvx[p], vy = pvy[p], vz = pvz[p];
-    const C0=pC[Co],C1=pC[Co+1],C2=pC[Co+2];
-    const C3=pC[Co+3],C4=pC[Co+4],C5=pC[Co+5];
-    const C6=pC[Co+6],C7=pC[Co+7],C8=pC[Co+8];
-
-    const WX = [wx0,wx1,wx2], WY = [wy0,wy1,wy2], WZ = [wz0,wz1,wz2];
-
-    for (let i = 0; i < 3; i++) {
-      const gi = bx + i; if (gi < 0 || gi >= N) continue;
-      const dpx = (i - fx) * DX;
-      for (let j = 0; j < 3; j++) {
-        const gj = by + j; if (gj < 0 || gj >= N) continue;
-        const dpy = (j - fy) * DX;
-        const wij = WX[i] * WY[j];
-        for (let k = 0; k < 3; k++) {
-          const gk = bz + k; if (gk < 0 || gk >= N) continue;
-          const dpz = (k - fz) * DX;
-          const w   = wij * WZ[k];
-          const idx = (gi * N + gj) * N + gk;
-
-          // APIC momentum + stress force
-          gM[idx]  += w;
-          gVx[idx] += w * (vx + C0*dpx + C1*dpy + C2*dpz + ss*dpx);
-          gVy[idx] += w * (vy + C3*dpx + C4*dpy + C5*dpz + ss*dpy);
-          gVz[idx] += w * (vz + C6*dpx + C7*dpy + C8*dpz + ss*dpz);
-        }
-      }
-    }
-  }
-
-  // ── Grid update ─────────────────────────────────────────────
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < N; j++) {
-      for (let k = 0; k < N; k++) {
-        const idx = (i * N + j) * N + k;
-        const mass = gM[idx];
-        if (mass < 1e-9) continue;
-
-        const im = 1 / mass;
-        let vx = gVx[idx] * im;
-        let vy = gVy[idx] * im + DT * gravity;
-        let vz = gVz[idx] * im;
-
-        // Hard walls
-        if (i < 2   && vx < 0) vx = 0;
-        if (i > N-3 && vx > 0) vx = 0;
-        if (j < 2   && vy < 0) vy = 0;
-        if (j > N-3 && vy > 0) vy = 0;
-        if (k < 2   && vz < 0) vz = 0;
-        if (k > N-3 && vz > 0) vz = 0;
-
-        gVx[idx] = vx;
-        gVy[idx] = vy;
-        gVz[idx] = vz;
-      }
-    }
-  }
-
-  // ── G2P ─────────────────────────────────────────────────────
-  for (let p = 0; p < nP; p++) {
-    const xp = px[p], yp = py[p], zp = pz[p];
-    const bx = (xp * INV - 0.5) | 0;
-    const by = (yp * INV - 0.5) | 0;
-    const bz = (zp * INV - 0.5) | 0;
-    const fx = xp * INV - bx;
-    const fy = yp * INV - by;
-    const fz = zp * INV - bz;
-
-    const wx0 = .5*(1.5-fx)*(1.5-fx), wx1 = .75-(fx-1)*(fx-1), wx2 = .5*(fx-.5)*(fx-.5);
-    const wy0 = .5*(1.5-fy)*(1.5-fy), wy1 = .75-(fy-1)*(fy-1), wy2 = .5*(fy-.5)*(fy-.5);
-    const wz0 = .5*(1.5-fz)*(1.5-fz), wz1 = .75-(fz-1)*(fz-1), wz2 = .5*(fz-.5)*(fz-.5);
-
-    const WX = [wx0,wx1,wx2], WY = [wy0,wy1,wy2], WZ = [wz0,wz1,wz2];
-
-    let nvx=0, nvy=0, nvz=0;
-    let C0=0,C1=0,C2=0,C3=0,C4=0,C5=0,C6=0,C7=0,C8=0;
-    const SC = 4 * INV * INV;
-
-    for (let i = 0; i < 3; i++) {
-      const gi = bx + i; if (gi < 0 || gi >= N) continue;
-      const dpx = (i - fx) * DX;
-      for (let j = 0; j < 3; j++) {
-        const gj = by + j; if (gj < 0 || gj >= N) continue;
-        const dpy = (j - fy) * DX;
-        const wij = WX[i] * WY[j];
-        for (let k = 0; k < 3; k++) {
-          const gk = bz + k; if (gk < 0 || gk >= N) continue;
-          const dpz = (k - fz) * DX;
-          const w   = wij * WZ[k];
-          const idx = (gi * N + gj) * N + gk;
-          const gvx = gVx[idx], gvy = gVy[idx], gvz = gVz[idx];
-
-          nvx += w * gvx; nvy += w * gvy; nvz += w * gvz;
-
-          const sc = w * SC;
-          C0 += sc*gvx*dpx; C1 += sc*gvx*dpy; C2 += sc*gvx*dpz;
-          C3 += sc*gvy*dpx; C4 += sc*gvy*dpy; C5 += sc*gvy*dpz;
-          C6 += sc*gvz*dpx; C7 += sc*gvz*dpy; C8 += sc*gvz*dpz;
-        }
-      }
-    }
-
-    // Apply material viscosity damping
-    const damp = MAT[pMt[p]].damp;
-    pvx[p] = nvx * damp;
-    pvy[p] = nvy * damp;
-    pvz[p] = nvz * damp;
-
-    const Co = p * 9;
-    pC[Co]=C0; pC[Co+1]=C1; pC[Co+2]=C2;
-    pC[Co+3]=C3; pC[Co+4]=C4; pC[Co+5]=C5;
-    pC[Co+6]=C6; pC[Co+7]=C7; pC[Co+8]=C8;
-
-    // J update: J *= (1 + dt * div(v)) where div(v) = trace(C)
-    let newJ = pJ[p] * (1 + DT * (C0 + C4 + C8));
-    pJ[p] = Math.max(0.05, Math.min(20, newJ));
-
-    // Advect
-    px[p] += DT * nvx;
-    py[p] += DT * nvy;
-    pz[p] += DT * nvz;
-
-    // Clamp to domain interior
-    const lo = 1.5 * DX, hi = (N - 1.5) * DX;
-    px[p] = px[p] < lo ? lo : px[p] > hi ? hi : px[p];
-    py[p] = py[p] < lo ? lo : py[p] > hi ? hi : py[p];
-    pz[p] = pz[p] < lo ? lo : pz[p] > hi ? hi : pz[p];
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 4. SPAWN
-// ═══════════════════════════════════════════════════════════════
-function spawnBox(x0,y0,z0, x1,y1,z1, mat) {
-  const ppc  = 2;
-  const step = DX / ppc;
-  for (let x = x0 + step*.1; x < x1; x += step) {
-    for (let y = y0 + step*.1; y < y1; y += step) {
-      for (let z = z0 + step*.1; z < z1; z += step) {
-        if (nP >= MAX) return;
-        const jr = (Math.random()-.5)*step*.4;
-        px[nP]=x+jr; py[nP]=y+jr; pz[nP]=z+jr;
-        pvx[nP]=0; pvy[nP]=0; pvz[nP]=0;
-        pJ[nP]=1; pMt[nP]=mat;
-        const Co=nP*9; for(let i=0;i<9;i++) pC[Co+i]=0;
-        nP++;
-      }
-    }
-  }
-}
-
-function initScene() {
-  // Initial water block
-  spawnBox(4, 8, 4, 12, 14, 12, M_WATER);
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 5. THREE.JS
-// ═══════════════════════════════════════════════════════════════
-const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({canvas, antialias:false, powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.9;
-
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x8899bb, 0.012);
-
-const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 600);
-cam.position.set(22, 14, 28);
-
-function resize() {
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  renderer.setSize(w, h, false);
-  cam.aspect = w / h;
-  cam.updateProjectionMatrix();
-}
-new ResizeObserver(resize).observe(canvas);
-resize();
-
-// Lights
-scene.add(new THREE.AmbientLight(0x334466, 0.7));
-const sun = new THREE.DirectionalLight(0xfff5dd, 1.4);
-sun.position.set(25, 50, 15);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = sun.shadow.camera.bottom = -30;
-sun.shadow.camera.right = sun.shadow.camera.top = 30;
-scene.add(sun);
-scene.add(Object.assign(new THREE.DirectionalLight(0x6688ff, 0.4), {position: new THREE.Vector3(-15,10,-10)}));
-
-// Sky
-const sky = new Sky(); sky.scale.setScalar(1000); scene.add(sky);
-const su = sky.material.uniforms;
-su.turbidity.value = 3.5; su.rayleigh.value = 1.2;
-su.mieCoefficient.value = 0.004; su.mieDirectionalG.value = 0.82;
-const sph = new THREE.Vector3();
-sph.setFromSphericalCoords(1, THREE.MathUtils.degToRad(72), THREE.MathUtils.degToRad(190));
-su.sunPosition.value.copy(sph);
-
-// Ground
-const gnd = new THREE.Mesh(
-  new THREE.PlaneGeometry(300, 300, 1, 1),
-  new THREE.MeshStandardMaterial({color:0x3a6b2f, roughness:0.95})
-);
-gnd.rotation.x = -Math.PI/2; gnd.receiveShadow = true; scene.add(gnd);
-
-// Domain box helper
-const domBox = new THREE.Box3(new THREE.Vector3(0,0,0), new THREE.Vector3(DOM,DOM,DOM));
-const domHelper = new THREE.Box3Helper(domBox, 0x004466);
-scene.add(domHelper);
-
-// Invisible collision plane for tap-to-spawn (hovers at mid domain height)
-const tapMesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(DOM*4, DOM*4),
-  new THREE.MeshBasicMaterial({visible:false, side:THREE.DoubleSide})
-);
-tapMesh.rotation.x = -Math.PI/2;
-tapMesh.position.set(DOM/2, DOM/2, DOM/2);
-scene.add(tapMesh);
-
-// ── Particle InstancedMesh ──────────────────────────────────
-const partGeo  = new THREE.SphereGeometry(0.21, 5, 3);
-const partMatM = new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.35, metalness:0.05});
-const partMesh = new THREE.InstancedMesh(partGeo, partMatM, MAX);
-partMesh.count = 0; partMesh.castShadow = false;
-scene.add(partMesh);
-
-const _dum  = new THREE.Object3D();
-const _col  = new THREE.Color();
-const MAT_COLS = MAT.map(m => new THREE.Color(m.col));
-
-function updateParticles() {
-  partMesh.count = nP;
-  for (let p = 0; p < nP; p++) {
-    _dum.position.set(px[p], py[p], pz[p]);
-    _dum.updateMatrix();
-    partMesh.setMatrixAt(p, _dum.matrix);
-    partMesh.setColorAt(p, MAT_COLS[pMt[p]]);
-  }
-  partMesh.instanceMatrix.needsUpdate = true;
-  if (partMesh.instanceColor) partMesh.instanceColor.needsUpdate = true;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 6. CONTROLS
-// ═══════════════════════════════════════════════════════════════
-const orbit = new OrbitControls(cam, canvas);
-orbit.target.set(DOM/2, 3, DOM/2);
-orbit.enableDamping = true; orbit.dampingFactor = 0.08;
-orbit.minDistance = 2; orbit.maxDistance = 100;
-orbit.maxPolarAngle = Math.PI * 0.88;
-orbit.update();
-
-// ── Tap to spawn ────────────────────────────────────────────
-const ray = new THREE.Raycaster();
-const _v2 = new THREE.Vector2();
-let   ptrDown = null, spawnSize = 2.5;
-
-canvas.addEventListener('pointerdown', e => { ptrDown = [e.clientX, e.clientY]; });
-canvas.addEventListener('pointerup', e => {
-  if (!ptrDown) return;
-  const dx = e.clientX - ptrDown[0], dy = e.clientY - ptrDown[1];
-  if (Math.sqrt(dx*dx+dy*dy) < 10) tapSpawn(e.clientX, e.clientY);
-  ptrDown = null;
-});
-
-function tapSpawn(cx, cy) {
-  const rect = canvas.getBoundingClientRect();
-  _v2.set(((cx-rect.left)/rect.width)*2-1, -((cy-rect.top)/rect.height)*2+1);
-  ray.setFromCamera(_v2, cam);
-  const hits = ray.intersectObject(tapMesh);
-  if (!hits.length) return;
-  const pt = hits[0].point;
-  const hs = spawnSize / 2;
-  const cx2 = Math.max(hs+1, Math.min(DOM-hs-1, pt.x));
-  const cz2 = Math.max(hs+1, Math.min(DOM-hs-1, pt.z));
-  const cy2 = Math.min(DOM - hs - 1, pt.y + spawnSize);
-  spawnBox(cx2-hs, cy2-spawnSize, cz2-hs, cx2+hs, cy2, cz2+hs, activeMat);
-  document.getElementById('hpc').textContent = nP;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 7. UI
-// ═══════════════════════════════════════════════════════════════
-let activeMat = M_WATER;
-let currentMode = 'world';
-
-document.querySelectorAll('.mbtn').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('.mbtn').forEach(x => x.classList.remove('on'));
-  b.classList.add('on');
-  currentMode = b.dataset.mode;
-}));
-
-document.querySelectorAll('.mfbtn').forEach(b => b.addEventListener('click', () => {
-  document.querySelectorAll('.mfbtn').forEach(x => x.classList.remove('on'));
-  b.classList.add('on');
-  activeMat = +b.dataset.m;
-  document.getElementById('hmat').textContent = MAT[activeMat].name;
-}));
-
-document.getElementById('fab-panel').addEventListener('click', () => {
-  document.body.classList.toggle('lp-open');
-});
-document.getElementById('btn-rp').addEventListener('click', () => {
-  document.body.classList.toggle('rp-open');
-});
-
-const sizeEl = document.getElementById('spawn-size');
-sizeEl.addEventListener('input', e => {
-  spawnSize = +e.target.value;
-  document.getElementById('size-label').textContent = spawnSize;
-});
-
-document.getElementById('fab-spawn').addEventListener('click', () => {
-  const cx = 3 + Math.random()*(DOM-6);
-  const cy = DOM - spawnSize - 0.5;
-  const cz = 3 + Math.random()*(DOM-6);
-  const hs = spawnSize/2;
-  spawnBox(cx-hs, cy-spawnSize, cz-hs, cx+hs, cy, cz+hs, activeMat);
-  document.getElementById('hpc').textContent = nP;
-});
-
-// lil-gui
-const gui = new GUI({container: document.getElementById('gui-root'), width:210, title:'Settings'});
-const simP = { gravity:-9.8, substeps:8, domainVis:true, reset(){ nP=0; initScene(); } };
-gui.add(simP,'gravity',-25,0,.1).name('Gravity').onChange(v=>{ gravity=v; });
-gui.add(simP,'substeps',1,16,1).name('Substeps');
-gui.add(simP,'domainVis').name('Domain Box').onChange(v=>{ domHelper.visible=v; });
-gui.add(simP,'reset').name('Reset Simulation');
-
-// Orientation / responsive
-function orient() {
-  const ls = window.innerWidth > window.innerHeight;
-  document.body.classList.toggle('landscape', ls);
-  document.body.classList.toggle('portrait', !ls);
-  document.body.classList.toggle('desk', window.innerWidth >= 900 && ls);
-  resize();
-}
-window.addEventListener('resize', orient);
-orient();
-
-// Hint auto-hide
-setTimeout(() => { const h=document.getElementById('hint'); if(h){h.style.opacity='0'; setTimeout(()=>h.remove(),1200);} }, 4000);
-
-// ═══════════════════════════════════════════════════════════════
-// 8. MAIN LOOP
-// ═══════════════════════════════════════════════════════════════
-let lastT=0, frames=0, fpsAcc=0;
-const fpsEl = document.getElementById('hfps');
-
-function tick(t) {
-  requestAnimationFrame(tick);
-  const sub = simP.substeps | 0;
-  for (let s = 0; s < sub; s++) mpmStep();
-
-  orbit.update();
-  updateParticles();
-  renderer.render(scene, cam);
-
-  frames++;
-  fpsAcc += t - lastT;
-  lastT = t;
-  if (fpsAcc > 600) {
-    fpsEl.textContent = Math.round(frames / fpsAcc * 1000);
-    frames = 0; fpsAcc = 0;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 9. INIT
-// ═══════════════════════════════════════════════════════════════
-initScene();
-document.getElementById('hpc').textContent = nP;
-
-const ld = document.getElementById('ld');
-ld.style.opacity = '0';
-setTimeout(() => ld.remove(), 600);
-
-requestAnimationFrame(tick);
-</script>
 </body>
 </html>
