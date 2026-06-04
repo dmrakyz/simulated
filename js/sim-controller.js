@@ -6,7 +6,7 @@
  * back transparently to running the engine on the main thread.
  *
  * The render side only ever reads `controller.count` + `controller.snapshot`
- * (a Float32Array, stride 5: x,y,z,matId,tempK), so it doesn't care which
+ * (a Float32Array, stride 4: x,y,z,matId), so it doesn't care which
  * backend is active.
  */
 
@@ -67,31 +67,22 @@ export class SimController {
   }
 
   /* ── Commands ──────────────────────────────────────────────── */
-  spawnBox(...args)   { this.isWorker ? this.worker.postMessage({ cmd:'spawnBox', args }) : this.mpm.spawnBox(...args); }
-  addHeat(x,y,z,r,dT) { this.isWorker ? this.worker.postMessage({ cmd:'addHeat', x,y,z,r,dT }) : this.mpm.addHeat(x,y,z,r,dT); }
-  reset()             { this.isWorker ? this.worker.postMessage({ cmd:'reset' }) : this.mpm.reset(); }
-  setGravity(v)       { this.isWorker ? this.worker.postMessage({ cmd:'setGravity', v }) : (this.mpm.gravity = v); }
-  setSubsteps(v)      { this.isWorker ? this.worker.postMessage({ cmd:'setSubsteps', v }) : (this.mpm.sub = v); }
+  spawnBox(...args) { this.isWorker ? this.worker.postMessage({ cmd:'spawnBox', args }) : this.mpm.spawnBox(...args); }
+  reset()           { this.isWorker ? this.worker.postMessage({ cmd:'reset' }) : this.mpm.reset(); }
+  setGravity(v)     { this.isWorker ? this.worker.postMessage({ cmd:'setGravity', v }) : (this.mpm.gravity = v); }
+  setSubsteps(v)    { this.isWorker ? this.worker.postMessage({ cmd:'setSubsteps', v }) : (this.mpm.sub = v); }
 
   /* ── Main-thread fallback stepping ─────────────────────────── */
   stepLocal() {
     if (this.isWorker || !this.mpm) return;
     try { this.mpm.tick(); } catch (e) { console.error('MPM tick:', e.message); }
     const n = this.mpm.nP;
-    if (!this._localBuf || this._localBuf.length !== n * 5) this._localBuf = new Float32Array(n * 5);
+    if (!this._localBuf || this._localBuf.length !== n * 4) this._localBuf = new Float32Array(n * 4);
     const b = this._localBuf, m = this.mpm;
-    for (let p = 0, o = 0; p < n; p++, o += 5) {
-      b[o]=m.px[p]; b[o+1]=m.py[p]; b[o+2]=m.pz[p]; b[o+3]=m.pMt[p]; b[o+4]=m.pT[p];
+    for (let p = 0, o = 0; p < n; p++, o += 4) {
+      b[o]=m.px[p]; b[o+1]=m.py[p]; b[o+2]=m.pz[p]; b[o+3]=m.pMt[p];
     }
     this.snapshot = b;
     this.count    = n;
-  }
-
-  avgTemp() {
-    const n = this.count, s = this.snapshot;
-    if (!n) return null;
-    let sum=0, c=0, step=Math.max(1,(n/200)|0);
-    for (let p=0; p<n; p+=step) { sum += s[p*5+4]; c++; }
-    return c ? sum/c : null;
   }
 }

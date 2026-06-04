@@ -5,7 +5,6 @@
  * Protocol (main → worker):
  *   { cmd:'init', opts }            create the engine
  *   { cmd:'spawnBox', args:[...] }  spawn particles
- *   { cmd:'addHeat', x,y,z,r,dT }   inject/remove heat
  *   { cmd:'reset' }                 clear all particles
  *   { cmd:'setGravity', v }
  *   { cmd:'setSubsteps', v }
@@ -14,8 +13,8 @@
  *
  * Protocol (worker → main):
  *   { type:'ready' }
- *   { type:'snapshot', count, buf, tickMs }   buf = Float32Array stride 5
- *                                              [x,y,z,matId,tempK] per particle
+ *   { type:'snapshot', count, buf, tickMs }   buf = Float32Array stride 4
+ *                                              [x,y,z,matId] per particle
  *   { type:'error', msg }
  */
 
@@ -26,24 +25,23 @@ let running = false;
 let freeBuf = null;     // recycled ArrayBuffer returned by the main thread
 let lastTickMs = 8;
 
-/* Build a compact render snapshot (stride 5: x,y,z,mat,temp). */
+/* Build a compact render snapshot (stride 4: x,y,z,matId). */
 function buildSnapshot() {
   const n = mpm.nP;
-  const need = n * 5 * 4;
+  const need = n * 4 * 4;
   let f32;
   if (freeBuf && freeBuf.byteLength === need) {
     f32 = new Float32Array(freeBuf);
     freeBuf = null;
   } else {
-    f32 = new Float32Array(n * 5);
+    f32 = new Float32Array(n * 4);
   }
-  const { px, py, pz, pMt, pT } = mpm;
-  for (let p = 0, o = 0; p < n; p++, o += 5) {
+  const { px, py, pz, pMt } = mpm;
+  for (let p = 0, o = 0; p < n; p++, o += 4) {
     f32[o]   = px[p];
     f32[o+1] = py[p];
     f32[o+2] = pz[p];
     f32[o+3] = pMt[p];
-    f32[o+4] = pT[p];
   }
   return f32;
 }
@@ -75,7 +73,6 @@ onmessage = (e) => {
       loop();
       break;
     case 'spawnBox':   if (mpm) mpm.spawnBox(...d.args); break;
-    case 'addHeat':    if (mpm) mpm.addHeat(d.x, d.y, d.z, d.r, d.dT); break;
     case 'reset':      if (mpm) mpm.reset(); break;
     case 'setGravity': if (mpm) mpm.gravity = d.v; break;
     case 'setSubsteps':if (mpm) mpm.sub = d.v; break;

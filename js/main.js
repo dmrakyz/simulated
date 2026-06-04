@@ -146,7 +146,7 @@ async function main() {
     } catch(e) { ldWarn(r,'Builder: '+e.message); } }
 
   /* 13 ── GUI */
-  const simP = { gravity:-9.8, substeps:SUBS, domain:true, heatRadius:1.0 };
+  const simP = { gravity:-9.8, substeps:SUBS, domain:true };
   if (GUI) {
     const r=ldStep('Properties GUI…');
     try { buildGUI(GUI, simP, sim, domHelper); ldOk(r); }
@@ -166,7 +166,6 @@ async function main() {
   /* ── Render loop ──────────────────────────────────────────── */
   const fpsEl  = document.getElementById('hfps');
   const pcEl   = document.getElementById('hpc');
-  const tempEl = document.getElementById('htemp');
   let _lastFpsT=0, _fc=0;
 
   // Resize composer when canvas resizes
@@ -208,10 +207,6 @@ async function main() {
     if (t - _lastFpsT > 700) {
       fpsEl.textContent = Math.round(_fc/(t-_lastFpsT)*1000);
       pcEl.textContent  = sim.count.toLocaleString();
-      if (tempEl) {
-        const avgT = sim.avgTemp();
-        tempEl.textContent = avgT !== null ? (avgT-273).toFixed(0)+'°C' : '--';
-      }
       _fc=0; _lastFpsT=t;
     }
   }
@@ -307,13 +302,6 @@ function buildGUI(GUI, simP, sim, domHelper) {
   gui.add(simP,'gravity',-25,0,0.1).name('Gravity m/s²');
   gui.add(simP,'substeps',3,12,1).name('Substeps/frame');
   gui.add(simP,'domain').name('Domain box').onChange(v=>{domHelper.visible=v;});
-  gui.add(simP,'heatRadius',0.5,5,0.1).name('Heat radius');
-
-  const c = sim.DOMAIN/2;
-  const heat = { add:()=>sim.addHeat(c,c,c, simP.heatRadius, 80),
-                 rem:()=>sim.addHeat(c,c,c, simP.heatRadius,-80) };
-  gui.add(heat,'add').name('🔥 Add heat (centre)');
-  gui.add(heat,'rem').name('❄ Remove heat (centre)');
 
   const actions={
     reset(){ sim.reset(); },
@@ -440,12 +428,7 @@ function wireUI(THREE, sim, cam, tapMesh, simP, builder) {
   /* ── FAB spawn ─────────────────────────────────────────────── */
   document.getElementById('fab-spawn')?.addEventListener('click',()=>spawnRandom(sim,activeMat));
 
-  /* ── Heat brush (hold H + tap) ─────────────────────────────── */
-  let heatMode=false, heatDir=1;
-  document.addEventListener('keydown',e=>{ if(e.key==='h'||e.key==='H'){heatMode=true;heatDir=e.shiftKey?-1:1;} });
-  document.addEventListener('keyup',  e=>{ if(e.key==='h'||e.key==='H') heatMode=false; });
-
-  /* ── Tap-to-pour / heat (canvas) ───────────────────────────── */
+  /* ── Tap-to-pour (canvas) ──────────────────────────────────── */
   const ray=new THREE.Raycaster(), rv2=new THREE.Vector2();
   let ptrDn=null;
   const canvas=document.getElementById('c');
@@ -461,15 +444,11 @@ function wireUI(THREE, sim, cam, tapMesh, simP, builder) {
       const hits=ray.intersectObject(tapMesh);
       if (hits.length) {
         const pt=hits[0].point;
-        if (heatMode) {
-          sim.addHeat(pt.x, pt.y, pt.z, simP.heatRadius, 120*heatDir);
-        } else {
-          const hs=spawnSize/2;
-          const cx=Math.max(hs+.5,Math.min(DOM-hs-.5,pt.x));
-          const cz=Math.max(hs+.5,Math.min(DOM-hs-.5,pt.z));
-          const cy=Math.min(DOM-hs-.5, pt.y+spawnSize*1.5);
-          sim.spawnBox(cx-hs,cy-spawnSize,cz-hs, cx+hs,cy,cz+hs, activeMat);
-        }
+        const hs=spawnSize/2;
+        const cx=Math.max(hs+.5,Math.min(DOM-hs-.5,pt.x));
+        const cz=Math.max(hs+.5,Math.min(DOM-hs-.5,pt.z));
+        const cy=Math.min(DOM-hs-.5, pt.y+spawnSize*1.5);
+        sim.spawnBox(cx-hs,cy-spawnSize,cz-hs, cx+hs,cy,cz+hs, activeMat);
       }
     }
     ptrDn=null;

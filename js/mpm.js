@@ -1,110 +1,35 @@
 /**
- * MLS-MPM Physics Engine — with heat, phase transitions, air/steam.
+ * MLS-MPM Physics Engine — no heat, no phase transitions.
  * Hu et al. 2018 (MLS-MPM), CPU implementation, no external deps.
  *
- * HEAT SYSTEM
- * -----------
- *  Each particle carries a temperature T (Kelvin).
- *  P2G scatters mass-weighted temperature to the grid.
- *  G2P gathers the grid temperature average back (= thermal diffusion).
- *  Phase transitions (water→ice, ice→water, lava→rock, etc.) run after G2P.
- *  Temperature-dependent viscosity (cScale) and stiffness (E) are pre-computed
- *  once per substep into per-particle typed arrays to keep the hot P2G/G2P loops
- *  branch-free.
- *
- * MATERIALS
- * ---------
- *  0 Water   1 Sand   2 Lava   3 Snow   4 Honey
- *  5 Mud     6 Oil    7 Ice    8 Air    9 Steam
+ * MATERIALS: 0=Water 1=Sand 2=Lava 3=Snow 4=Honey 5=Mud 6=Oil 7=Ice 8=Air
  */
-
-/* ── Kelvin constants ─────────────────────────────────────────── */
-export const K = {
-  AMBIENT: 293,   // 20 °C
-  FREEZE:  273,   // 0 °C
-  BOIL:    373,   // 100 °C
-  ICE:     258,   // -15 °C
-  LAVA:    1200,
-  SOLIDIFY:900,
-};
 
 /* type codes: 0=fluid  1=granular  2=elastic */
 const TC = { fluid:0, granular:1, elastic:2 };
 
 export const MATERIALS = [
-  // ── 0: Water ───────────────────────────────────────────────────
-  { name:'Water', col:0x2299ff, rho:1000, E:7e5,
-    type:'fluid',    cScale:1.00, vdamp:1.000,
-    T_init:K.AMBIENT, cond:0.14,
-    cScale_cold:0.88, T_visc_cold:K.FREEZE,
-    cScale_hot: 1.00, T_visc_hot: K.BOIL,
-    T_solidify: K.FREEZE, solidifyTo:7,
-    T_vaporize: K.BOIL,   vaporizeTo:9,
-  },
-  // ── 1: Sand ────────────────────────────────────────────────────
-  { name:'Sand',  col:0xd9b25f, rho:1600, E:5e5,
-    type:'granular', cScale:0.20, vdamp:0.998,
-    T_init:K.AMBIENT, cond:0.04,
-  },
-  // ── 2: Lava ────────────────────────────────────────────────────
-  { name:'Lava',  col:0xff5522, rho:3100, E:8e5,
-    type:'fluid',    cScale:0.50, vdamp:0.992,
-    T_init:K.LAVA, cond:0.06,
-    cScale_cold:0.04, T_visc_cold:K.SOLIDIFY,
-    cScale_hot: 0.55, T_visc_hot: K.LAVA,
-    T_solidify: K.SOLIDIFY, solidifyTo:1,  // cools → rock/sand
-  },
-  // ── 3: Snow ────────────────────────────────────────────────────
-  { name:'Snow',  col:0xeef3ff, rho:400,  E:1.2e5, nu:0.20,
-    type:'elastic',  cScale:1.00, vdamp:0.999,
-    T_init:K.ICE, cond:0.07,
-    T_vaporize:K.FREEZE, vaporizeTo:0,  // melts → water
-  },
-  // ── 4: Honey ───────────────────────────────────────────────────
-  { name:'Honey', col:0xffb022, rho:1400, E:6e5,
-    type:'fluid',    cScale:0.30, vdamp:0.992,
-    T_init:K.AMBIENT, cond:0.09,
-    cScale_cold:0.12, T_visc_cold:275,
-    cScale_hot: 0.68, T_visc_hot: 360,
-  },
-  // ── 5: Mud ─────────────────────────────────────────────────────
-  { name:'Mud',   col:0x7a5a38, rho:1800, E:4e5,
-    type:'granular', cScale:0.28, vdamp:0.996,
-    T_init:K.AMBIENT, cond:0.05,
-    T_vaporize:395, vaporizeTo:1,  // dries out → sand
-  },
-  // ── 6: Oil ─────────────────────────────────────────────────────
-  { name:'Oil',   col:0x3c3a22, rho:900,  E:6e5,
-    type:'fluid',    cScale:0.80, vdamp:0.997,
-    T_init:K.AMBIENT, cond:0.11,
-    cScale_cold:0.60, T_visc_cold:280,
-    cScale_hot: 0.96, T_visc_hot: 380,
-    T_vaporize:450, vaporizeTo:9,  // ignites/vaporises
-  },
-  // ── 7: Ice ─────────────────────────────────────────────────────
-  { name:'Ice',   col:0xaadcff, rho:917,  E:8e5, nu:0.32,
-    type:'elastic',  cScale:1.00, vdamp:1.000,
-    T_init:K.ICE, cond:0.22,
-    T_vaporize:K.FREEZE, vaporizeTo:0,  // melts → water
-  },
-  // ── 8: Air ─────────────────────────────────────────────────────
-  // rho boosted to 40 (real=1.2) so mass ratios stay CFL-stable.
-  // Buoyancy is still visually correct: 25× lighter than water.
-  { name:'Air',   col:0x88aacc, rho:40,  E:5e4,
-    type:'fluid',    cScale:1.00, vdamp:1.000,
-    T_init:K.AMBIENT, cond:0.03,
-    // thermal expansion: hot air gets a fake density reduction via extra upward push
-    thermalExpansion:0.003,
-  },
-  // ── 9: Steam ───────────────────────────────────────────────────
-  { name:'Steam', col:0xddeeff, rho:25,  E:3e4,
-    type:'fluid',    cScale:1.00, vdamp:1.000,
-    T_init:390, cond:0.02,
-    T_solidify:K.BOIL, solidifyTo:0,  // condenses → water
-  },
+  // 0: Water
+  { name:'Water', col:0x2299ff, rho:1000, E:7e5, type:'fluid',    cScale:1.00, vdamp:1.000 },
+  // 1: Sand
+  { name:'Sand',  col:0xd9b25f, rho:1600, E:5e5, type:'granular', cScale:0.20, vdamp:0.998 },
+  // 2: Lava
+  { name:'Lava',  col:0xff5522, rho:3100, E:8e5, type:'fluid',    cScale:0.50, vdamp:0.992 },
+  // 3: Snow
+  { name:'Snow',  col:0xeef3ff, rho:400,  E:1.2e5, nu:0.20, type:'elastic',  cScale:1.00, vdamp:0.999 },
+  // 4: Honey
+  { name:'Honey', col:0xffb022, rho:1400, E:6e5, type:'fluid',    cScale:0.30, vdamp:0.992 },
+  // 5: Mud
+  { name:'Mud',   col:0x7a5a38, rho:1800, E:4e5, type:'granular', cScale:0.28, vdamp:0.996 },
+  // 6: Oil
+  { name:'Oil',   col:0x3c3a22, rho:900,  E:6e5, type:'fluid',    cScale:0.80, vdamp:0.997 },
+  // 7: Ice
+  { name:'Ice',   col:0xaadcff, rho:917,  E:8e5, nu:0.32, type:'elastic', cScale:1.00, vdamp:1.000 },
+  // 8: Air — rho=40 (real≈1.2), boosted for numerical stability; 25× lighter than water
+  { name:'Air',   col:0x88aacc, rho:40,   E:5e4, type:'fluid',    cScale:1.00, vdamp:1.000 },
 ];
 
-/* Precompute Lamé params for every material (elastic uses them, others don't). */
+/* Precompute Lamé params for every material. */
 for (const m of MATERIALS) {
   const nu = m.nu ?? 0.3;
   m._mu = m.E / (2 * (1 + nu));
@@ -159,15 +84,12 @@ export class MPM {
     this.pF  = new Float32Array(M*9);
     this.pJ  = new Float32Array(M);
     this.pMt = new Uint8Array(M);
-    this.pT  = new Float32Array(M);    // temperature (K)
     this.nP  = 0;
 
     this.gM  = new Float32Array(this.N3);
     this.gVx = new Float32Array(this.N3);
     this.gVy = new Float32Array(this.N3);
     this.gVz = new Float32Array(this.N3);
-    this.gH  = new Float32Array(this.N3); // accumulated heat (mass×T)
-    this.gTV = new Float32Array(this.N3); // normalized grid temperature
 
     this._WX = new Float32Array(3);
     this._WY = new Float32Array(3);
@@ -180,10 +102,9 @@ export class MPM {
     this._mE    = new Float64Array(NM);
     this._mMu   = new Float64Array(NM);
     this._mLa   = new Float64Array(NM);
-    this._mCs   = new Float64Array(NM); // base cScale
-    this._mVd   = new Float64Array(NM); // vdamp
-    this._mCond = new Float64Array(NM); // thermal conductivity rate
-    this._mThEx = new Float64Array(NM); // thermal expansion (air)
+    this._mCs   = new Float64Array(NM);
+    this._mVd   = new Float64Array(NM);
+    this._mRho  = new Float64Array(NM);
     for (let i=0; i<NM; i++) {
       const m=MATERIALS[i];
       this._mType[i] = TC[m.type]??0;
@@ -193,21 +114,14 @@ export class MPM {
       this._mLa[i]   = m._la;
       this._mCs[i]   = m.cScale;
       this._mVd[i]   = m.vdamp;
-      this._mCond[i] = m.cond ?? 0;
-      this._mThEx[i] = m.thermalExpansion ?? 0;
+      this._mRho[i]  = m.rho;
     }
-
-    /* Per-substep pre-computed effective properties (avoids inner-loop math) */
-    this._effE  = new Float64Array(M); // T-dependent E
-    this._effCs = new Float64Array(M); // T-dependent cScale
-    this._effMs = new Float64Array(M); // T-adjusted particle mass (buoyancy)
   }
 
   /* ── Spawn ─────────────────────────────────────────────────── */
   spawnBox(x0,y0,z0,x1,y1,z1,matId,ppc=2) {
     const step=this.DX/ppc, lo=1.5*this.DX, hi=(this.N-1.5)*this.DX;
     const jitter=step*0.25;
-    const T_init = MATERIALS[matId]?.T_init ?? K.AMBIENT;
     for (let x=x0;x<x1;x+=step) for (let y=y0;y<y1;y+=step) for (let z=z0;z<z1;z+=step) {
       if (this.nP>=this.MAX) return;
       const i=this.nP++;
@@ -215,7 +129,7 @@ export class MPM {
       this.py[i]=Math.max(lo,Math.min(hi,y+(Math.random()-.5)*jitter));
       this.pz[i]=Math.max(lo,Math.min(hi,z+(Math.random()-.5)*jitter));
       this.pvx[i]=0; this.pvy[i]=0; this.pvz[i]=0;
-      this.pJ[i]=1; this.pMt[i]=matId; this.pT[i]=T_init;
+      this.pJ[i]=1; this.pMt[i]=matId;
       const o=i*9;
       this.pC[o]=0;this.pC[o+1]=0;this.pC[o+2]=0;
       this.pC[o+3]=0;this.pC[o+4]=0;this.pC[o+5]=0;
@@ -237,43 +151,20 @@ export class MPM {
   /* ── Single substep ────────────────────────────────────────── */
   _step(DT) {
     const { N,INV,DX,PVOL,DINV,
-            px,py,pz,pvx,pvy,pvz,pC,pF,pJ,pMt,pT,nP,
-            gM,gVx,gVy,gVz,gH,gTV,_WX,_WY,_WZ,
-            _mType,_mMass,_mE,_mMu,_mLa,_mCs,_mVd,_mCond,_mThEx,
-            _effE,_effCs,_effMs } = this;
+            px,py,pz,pvx,pvy,pvz,pC,pF,pJ,pMt,nP,
+            gM,gVx,gVy,gVz,_WX,_WY,_WZ,
+            _mType,_mMass,_mE,_mMu,_mLa,_mCs,_mVd,_mRho } = this;
+    const g    = this.gravity;
+    const absG = Math.abs(g);
     const coef = -DT * PVOL * DINV;
 
-    /* ── Precompute T-dependent per-particle properties ──────── */
-    for (let p=0; p<nP; p++) {
-      const mt=pMt[p], T=pT[p];
-      const m=MATERIALS[mt];
-      // Temperature-dependent stiffness: elastic materials soften when hot
-      _effE[p] = _mE[mt];
-      // Temperature-dependent viscosity (cScale)
-      if (m.cScale_cold !== undefined) {
-        const t = Math.max(0, Math.min(1, (T - m.T_visc_cold) / (m.T_visc_hot - m.T_visc_cold)));
-        _effCs[p] = m.cScale_cold + t * (m.cScale_hot - m.cScale_cold);
-      } else {
-        _effCs[p] = _mCs[mt];
-      }
-      // Temperature-adjusted effective mass for buoyancy of gas/air
-      // Hot air/steam is lighter → expand less in pressure → rises more
-      const thEx = _mThEx[mt];
-      if (thEx > 0) {
-        const tempRatio = K.AMBIENT / Math.max(200, T);
-        _effMs[p] = _mMass[mt] * tempRatio;
-      } else {
-        _effMs[p] = _mMass[mt];
-      }
-    }
-
     /* ── RESET GRID ──────────────────────────────────────────── */
-    gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0); gH.fill(0);
+    gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0);
 
     /* ── P2G ─────────────────────────────────────────────────── */
     for (let p=0; p<nP; p++) {
       const mt=pMt[p], type=_mType[mt];
-      const pm=_effMs[p], fo=p*9, T=pT[p];
+      const pm=_mMass[mt], fo=p*9;
 
       const C0=pC[fo],   C1=pC[fo+1],C2=pC[fo+2];
       const C3=pC[fo+3], C4=pC[fo+4],C5=pC[fo+5];
@@ -298,7 +189,7 @@ export class MPM {
         A6=coef*mu2*p6+pm*C6;      A7=coef*mu2*p7+pm*C7; A8=coef*(mu2*p8+lj)+pm*C8;
       } else { /* fluid / granular */
         const J=pJ[p];
-        let press = _effE[p] * (J-1);
+        let press = _mE[mt] * (J-1);
         if (press>0) press=0;
         const s=coef*press;
         A0=s+pm*C0; A1=pm*C1;  A2=pm*C2;
@@ -330,14 +221,12 @@ export class MPM {
             gVx[idx] += w*(mvx+A0*dpx+A1*dpy+A2*dpz);
             gVy[idx] += w*(mvy+A3*dpx+A4*dpy+A5*dpz);
             gVz[idx] += w*(mvz+A6*dpx+A7*dpy+A8*dpz);
-            gH[idx]  += w*pm*T;   // scatter heat
           }
         }
       }
     }
 
     /* ── GRID UPDATE ─────────────────────────────────────────── */
-    const g=this.gravity;
     for (let idx=0; idx<this.N3; idx++) {
       const mass=gM[idx]; if (mass<1e-12) continue;
       const im=1/mass;
@@ -346,12 +235,11 @@ export class MPM {
       if (i<2   && vx<0) vx=0; if (i>N-3 && vx>0) vx=0;
       if (j<2   && vy<0) vy=0; if (j>N-3 && vy>0) vy=0;
       if (k<2   && vz<0) vz=0; if (k>N-3 && vz>0) vz=0;
-      if (j<2)  { vx*=.90; vz*=.90; }  // floor friction
+      if (j<2)  { vx*=.90; vz*=.90; }
       gVx[idx]=vx; gVy[idx]=vy; gVz[idx]=vz;
-      gTV[idx] = gH[idx]*im;  // normalise heat → grid temperature
     }
 
-    /* ── G2P + heat gather + deformation update ─────────────── */
+    /* ── G2P ─────────────────────────────────────────────────── */
     const lo=1.5*DX, hi=(N-1.5)*DX;
 
     for (let p=0; p<nP; p++) {
@@ -365,7 +253,6 @@ export class MPM {
 
       let nvx=0,nvy=0,nvz=0;
       let C0=0,C1=0,C2=0,C3=0,C4=0,C5=0,C6=0,C7=0,C8=0;
-      let gridT=0, gridW=0;
 
       for (let i=0;i<3;i++) {
         const gi=bx+i; if (gi<0||gi>=N) continue;
@@ -383,28 +270,32 @@ export class MPM {
             C0+=sc*gvx*dpx;C1+=sc*gvx*dpy;C2+=sc*gvx*dpz;
             C3+=sc*gvy*dpx;C4+=sc*gvy*dpy;C5+=sc*gvy*dpz;
             C6+=sc*gvz*dpx;C7+=sc*gvz*dpy;C8+=sc*gvz*dpz;
-            // temperature gather (only from non-zero cells)
-            if (gM[idx]>1e-12) { gridT+=w*gTV[idx]; gridW+=w; }
+          }
+        }
+      }
+
+      /* Archimedes buoyancy for very light fluids (air, rho≈40).
+         Sample local grid density at the centre cell of the stencil.
+         Quadratic B-spline centre-cell weight ≈ 0.30 on average. */
+      if (type === 0 && _mRho[mt] < 100) {
+        const cx=bx+1, cy=by+1, cz=bz+1;
+        if (cx>=0&&cx<N&&cy>=0&&cy<N&&cz>=0&&cz<N) {
+          const cidx=(cx*N+cy)*N+cz;
+          const rho_local = gM[cidx] / (0.30 * PVOL);
+          if (rho_local > 300) { // denser medium present (> 7× air density)
+            const a_b = Math.min((rho_local / _mRho[mt] - 1) * absG * 0.15, 100);
+            nvy += a_b * DT;
           }
         }
       }
 
       pvx[p]=nvx*_mVd[mt]; pvy[p]=nvy*_mVd[mt]; pvz[p]=nvz*_mVd[mt];
 
-      const cs=_effCs[p];
+      const cs=_mCs[mt];
       C0*=cs;C1*=cs;C2*=cs;C3*=cs;C4*=cs;C5*=cs;C6*=cs;C7*=cs;C8*=cs;
       pC[fo]=C0;pC[fo+1]=C1;pC[fo+2]=C2;
       pC[fo+3]=C3;pC[fo+4]=C4;pC[fo+5]=C5;
       pC[fo+6]=C6;pC[fo+7]=C7;pC[fo+8]=C8;
-
-      /* Thermal diffusion: particle T moves toward grid average */
-      if (gridW > 0.01) {
-        const avgT = gridT / gridW;
-        const cond = _mCond[mt];
-        pT[p] += cond * (avgT - pT[p]);
-      }
-      /* Slow radiative cooling toward ambient (~0.3°C / s) */
-      pT[p] += 0.00008 * (K.AMBIENT - pT[p]);
 
       /* Deformation gradient update */
       if (type===2) {
@@ -428,50 +319,6 @@ export class MPM {
       px[p]=npx<lo?lo:npx>hi?hi:npx;
       py[p]=npy<lo?lo:npy>hi?hi:npy;
       pz[p]=npz<lo?lo:npz>hi?hi:npz;
-    }
-
-    /* ── Phase transitions ───────────────────────────────────── */
-    this._applyPhaseTransitions();
-  }
-
-  _applyPhaseTransitions() {
-    const { pMt, pT, pJ, pF, nP } = this;
-    for (let p=0; p<nP; p++) {
-      const mt = pMt[p];
-      const T  = pT[p];
-      const m  = MATERIALS[mt];
-
-      let newMt = -1;
-      if (m.T_vaporize !== undefined && T >= m.T_vaporize) {
-        newMt = m.vaporizeTo;
-      } else if (m.T_solidify !== undefined && T <= m.T_solidify) {
-        newMt = m.solidifyTo;
-      }
-
-      if (newMt >= 0 && newMt !== mt) {
-        pMt[p] = newMt;
-        // Carry over temperature; let the new material's cond pull it into range
-        // Reset deformation state
-        pJ[p] = 1.0;
-        const fo = p*9;
-        pF[fo]=1;pF[fo+1]=0;pF[fo+2]=0;
-        pF[fo+3]=0;pF[fo+4]=1;pF[fo+5]=0;
-        pF[fo+6]=0;pF[fo+7]=0;pF[fo+8]=1;
-        // Update flat arrays for the changed particle
-        this._effE[p]  = this._mE[newMt];
-        this._effCs[p] = this._mCs[newMt];
-        this._effMs[p] = this._mMass[newMt];
-      }
-    }
-  }
-
-  /* ── Heat injection (external API) ─────────────────────────── */
-  /** Add heat to all particles within radius of world point (x,y,z). */
-  addHeat(wx, wy, wz, radius, deltaT) {
-    const r2 = radius*radius;
-    for (let p=0; p<this.nP; p++) {
-      const dx=this.px[p]-wx, dy=this.py[p]-wy, dz=this.pz[p]-wz;
-      if (dx*dx+dy*dy+dz*dz < r2) this.pT[p] += deltaT;
     }
   }
 }

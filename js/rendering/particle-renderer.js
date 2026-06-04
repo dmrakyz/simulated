@@ -1,23 +1,21 @@
 /**
  * Particle Renderer — NO custom shaders.
  *
- * Uses only stock Three.js materials so there is nothing to compile/break:
- *   Fluids (water, lava, honey, oil, air, steam)
+ * Uses only stock Three.js materials:
+ *   Fluids (water, lava, honey, oil, air)
  *     → THREE.Points + THREE.PointsMaterial with a soft round sprite texture
- *       and per-particle vertex colours. Overlapping soft sprites blend into
- *       a continuous fluid look rather than hard spheres.
+ *       and per-particle vertex colours.
  *   Elastic (ice, snow)
  *     → InstancedMesh + MeshStandardMaterial, per-instance colour.
  *   Granular (sand, mud)
  *     → InstancedMesh + MeshStandardMaterial, per-instance colour.
  *
- * Temperature drives per-particle colour: cold = material base colour,
- * hot = orange→white glow (and lava pushes colour > 1 so bloom catches it).
+ * Snapshot stride is 4: [x, y, z, matId] per particle.
  */
 
-import { MATERIALS, K } from '../mpm.js';
+import { MATERIALS } from '../mpm.js';
 
-/* Base RGB (0..1) per material id, used for colouring. */
+/* Base RGB (0..1) per material id. */
 const BASE = [
   [0.13,0.55,1.00], // 0 water
   [0.85,0.70,0.37], // 1 sand
@@ -28,21 +26,6 @@ const BASE = [
   [0.20,0.19,0.11], // 6 oil
   [0.67,0.86,1.00], // 7 ice
   [0.55,0.68,0.82], // 8 air
-  [0.87,0.93,1.00], // 9 steam
-];
-
-/* Heat normalisation ranges [cold, hot] per material id. */
-const HEAT_REF = [
-  [K.FREEZE, K.BOIL+100], // 0 water
-  [280, 700],             // 1 sand
-  [800, 1400],            // 2 lava
-  [220, K.FREEZE],        // 3 snow
-  [280, 360],             // 4 honey
-  [280, 500],             // 5 mud
-  [270, 450],             // 6 oil
-  [220, K.FREEZE+5],      // 7 ice
-  [270, 500],             // 8 air
-  [370, 600],             // 9 steam
 ];
 
 export class ParticleRenderer {
@@ -51,7 +34,7 @@ export class ParticleRenderer {
     this.scene = scene;
     this.MAX   = maxParticles;
 
-    this._FLUID    = new Set([0,2,4,6,8,9]);
+    this._FLUID    = new Set([0,2,4,6,8]);
     this._ELASTIC  = new Set([3,7]);
     // everything else (1 sand, 5 mud) is granular
 
@@ -128,59 +111,43 @@ export class ParticleRenderer {
     scene.add(this._granMesh);
   }
 
-  _heat(mt, T) {
-    const [c, h] = HEAT_REF[mt] ?? [280, 400];
-    return Math.max(0, Math.min(1, (T - c) / (h - c)));
-  }
-
-  /* Write material+heat colour into out (THREE.Color).
-     Heat only nudges the colour slightly — no glow / over-bright values. */
-  _color(mt, heat, out) {
+  /* Return the base colour for a material. */
+  _color(mt, out) {
     const b = BASE[mt] ?? [1,1,1];
-    let r=b[0], g=b[1], bl=b[2];
-    if (heat > 0.12) {
-      // subtle shift toward warm (hot) / cool (cold), clamped to [0,1]
-      const t = Math.min(1, (heat - 0.12) / 0.88) * 0.35;
-      const oR=1.0, oG=0.45, oB=0.20;
-      r  = r*(1-t)  + oR*t;
-      g  = g*(1-t)  + oG*t;
-      bl = bl*(1-t) + oB*t;
-    }
-    out.setRGB(Math.min(1,r), Math.min(1,g), Math.min(1,bl));
+    out.setRGB(b[0], b[1], b[2]);
     return out;
   }
 
   /**
    * @param {number} count
-   * @param {Float32Array} data  stride 5: x,y,z,matId,tempK
+   * @param {Float32Array} data  stride 4: x,y,z,matId
    */
-  update(count, data /*, camW, camH (unused) */) {
+  update(count, data) {
     const FLU = this._FLUID, EL = this._ELASTIC;
     const fPos = this._fPos, fCol = this._fCol;
     const col = this._col;
     let fi=0, si=0, gi=0;
 
     for (let p=0; p<count; p++) {
-      const o  = p*5;
+      const o  = p*4;
       const x  = data[o], y = data[o+1], z = data[o+2];
       const mt = data[o+3] | 0;
-      const heat = this._heat(mt, data[o+4]);
 
       if (FLU.has(mt)) {
         const b = fi*3;
         fPos[b]=x; fPos[b+1]=y; fPos[b+2]=z;
-        this._color(mt, heat, col);
+        this._color(mt, col);
         fCol[b]=col.r; fCol[b+1]=col.g; fCol[b+2]=col.b;
         fi++;
       } else if (EL.has(mt)) {
         this._dummy.position.set(x,y,z); this._dummy.updateMatrix();
         this._solidMesh.setMatrixAt(si, this._dummy.matrix);
-        this._solidMesh.setColorAt(si, this._color(mt, heat, col));
+        this._solidMesh.setColorAt(si, this._color(mt, col));
         si++;
       } else {
         this._dummy.position.set(x,y,z); this._dummy.updateMatrix();
         this._granMesh.setMatrixAt(gi, this._dummy.matrix);
-        this._granMesh.setColorAt(gi, this._color(mt, heat, col));
+        this._granMesh.setColorAt(gi, this._color(mt, col));
         gi++;
       }
     }
