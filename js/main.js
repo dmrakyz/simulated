@@ -43,7 +43,7 @@ function hideLoader() {
 
 /* ══════════════════════════════════════════════════════════════ */
 async function main() {
-  let THREE, OrbitControls, Sky, GUI, EffectComposer, UnrealBloomPass, RenderPass;
+  let THREE, OrbitControls, Sky, GUI, EffectComposer, UnrealBloomPass, RenderPass, TransformControls;
 
   /* 1 ── Three.js */
   { const r=ldStep('Loading Three.js…');
@@ -74,6 +74,11 @@ async function main() {
   { const r=ldStep('lil-gui…');
     try { const m=await import('lil-gui'); GUI=(m.default??m.GUI); ldOk(r); }
     catch(e) { ldWarn(r,'lil-gui unavailable'); } }
+
+  /* 5b ── TransformControls (creature gizmo) */
+  { const r=ldStep('TransformControls…');
+    try { const m=await import('three/addons/controls/TransformControls.js'); TransformControls=m.TransformControls; ldOk(r); }
+    catch(e) { ldWarn(r,'TransformControls unavailable – gizmo disabled'); } }
 
   /* 6 ── WebGL renderer */
   let renderer;
@@ -129,7 +134,20 @@ async function main() {
     try {
       const canvas=document.getElementById('c');
       builder=new CreatureBuilder(THREE, scene, cam, renderer, canvas);
-      // Inject the part palette now, before UI wiring queries its buttons.
+
+      /* TransformControls gizmo (optional) */
+      if (TransformControls) {
+        try {
+          const tc = new TransformControls(cam, canvas);
+          tc.setSize(0.8);
+          tc.addEventListener('dragging-changed', (ev) => { if (orbit) orbit.enabled = !ev.value; });
+          // r169+ exposes getHelper(); r168 adds the controls object directly.
+          scene.add(tc.getHelper ? tc.getHelper() : tc);
+          builder.setTransformControls(tc);
+        } catch(e) { console.warn('Gizmo init failed:', e.message); }
+      }
+
+      // Inject the part palette before UI wiring queries its buttons.
       const inner=document.getElementById('build-panel-inner');
       if (inner) inner.innerHTML = CreatureBuilder.buildPartPanelHTML();
       ldOk(r);
@@ -364,28 +382,60 @@ function wireUI(THREE, sim, cam, tapMesh, simP, builder) {
     });
   });
 
-  /* ── Creature builder part buttons ─────────────────────────── */
+  /* ── Creature builder controls ─────────────────────────────── */
+  // Part palette
   document.querySelectorAll('.part-btn[data-part]').forEach(b => {
     b.addEventListener('click', () => {
       document.querySelectorAll('.part-btn').forEach(x=>x.classList.remove('on'));
       b.classList.add('on');
-      if (builder) builder.setActivePart(b.dataset.part);
+      builder?.setActivePart(b.dataset.part);
     });
   });
+  // Presets
+  document.querySelectorAll('[data-preset]').forEach(b => {
+    b.addEventListener('click', () => builder?.loadPreset(b.dataset.preset));
+  });
+  // Gizmo mode
+  const btnMove = document.getElementById('btn-move');
+  const btnRot  = document.getElementById('btn-rotate');
+  btnMove?.addEventListener('click', () => { builder?.setGizmoMode('translate'); btnMove.classList.add('on'); btnRot?.classList.remove('on'); });
+  btnRot ?.addEventListener('click', () => { builder?.setGizmoMode('rotate');    btnRot.classList.add('on'); btnMove?.classList.remove('on'); });
+  // Joint type
+  document.querySelectorAll('[data-joint]').forEach(b => {
+    b.addEventListener('click', () => builder?.setJointType(b.dataset.joint));
+  });
+  // Rotate / mirror / delete / clear
+  document.getElementById('btn-rotx')?.addEventListener('click', ()=>builder?.rotateSelected('x', 15));
+  document.getElementById('btn-roty')?.addEventListener('click', ()=>builder?.rotateSelected('y', 15));
   document.getElementById('btn-mirror')?.addEventListener('click', ()=>builder?.toggleMirror());
   document.getElementById('btn-del')?.addEventListener('click',    ()=>builder?.deleteSelected());
+  document.getElementById('btn-clear')?.addEventListener('click',  ()=>builder?.clearAll());
   document.getElementById('btn-save')?.addEventListener('click',   ()=>builder?.save());
-  document.getElementById('btn-load')?.addEventListener('click',   ()=>{ if(builder?.load()) alert('Creature loaded!'); else alert('No saved creature.'); });
-
+  document.getElementById('btn-load')?.addEventListener('click',   ()=>{ if(!builder?.load()) alert('No saved creature.'); });
+  // Chain length
+  const chainEl = document.getElementById('chain-len');
+  chainEl?.addEventListener('input', e => {
+    const v=+e.target.value;
+    document.getElementById('chain-val').textContent = v;
+    builder?.setChainLength(v);
+  });
+  // Scale (absolute)
   const scaleSlider = document.getElementById('part-scale');
-  if (scaleSlider) {
-    scaleSlider.addEventListener('input', e => {
-      const v=+e.target.value;
-      document.getElementById('scale-val').textContent=v.toFixed(1);
-      if (builder) builder.scaleSelected(v / (parseFloat(scaleSlider.dataset.prev??1)));
-      scaleSlider.dataset.prev = v;
-    });
-  }
+  scaleSlider?.addEventListener('input', e => {
+    const v=+e.target.value;
+    document.getElementById('scale-val').textContent = v.toFixed(1);
+    builder?.scaleSelected(v);
+  });
+
+  /* Selected-part info readout */
+  document.getElementById('c').addEventListener('creature-change', (e) => {
+    const info = document.getElementById('sel-info');
+    if (!info) return;
+    const s = e.detail.selected;
+    info.textContent = s
+      ? `${s.type} · joint: ${s.joint} · scale ${s.scale.toFixed(1)}×  (${e.detail.parts} parts)`
+      : `None selected  (${e.detail.parts} parts)`;
+  });
 
   /* ── Panel toggles ─────────────────────────────────────────── */
   document.getElementById('fab-panel')?.addEventListener('click',()=>document.body.classList.toggle('lp-open'));
