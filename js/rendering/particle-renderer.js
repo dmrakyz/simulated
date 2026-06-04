@@ -24,9 +24,10 @@ import { MATERIALS, K } from '../mpm.js';
 /* ── Shader sources ─────────────────────────────────────────────── */
 
 const FLUID_VERT = /* glsl */`
-uniform float uSplatR;   // world-space splat radius (metres)
-attribute float aHeat;   // 0 = cold, 1 = hot (normalised T)
-attribute float aMat;    // material id (float for attribute api)
+uniform float uSplatR;     // world-space splat radius (metres)
+uniform vec2  resolution;  // canvas size in device px
+attribute float aHeat;     // 0 = cold, 1 = hot (normalised T)
+attribute float aMat;      // material id (float for attribute api)
 varying float  vHeat;
 varying float  vMat;
 varying vec3   vViewPos;
@@ -40,8 +41,8 @@ void main(){
   vMat      = aMat;
   gl_Position = projectionMatrix * mv;
   // Screen-space point size from world-radius and projection
-  float sizeInPx = projectionMatrix[1][1] * uSplatR / (-mv.z) * resolution.y * 0.5;
-  gl_PointSize = max(2.0, sizeInPx);
+  float sizeInPx = projectionMatrix[1][1] * uSplatR / max(0.001, -mv.z) * resolution.y * 0.5;
+  gl_PointSize = clamp(sizeInPx, 2.0, 256.0);
 }`;
 
 const FLUID_FRAG = /* glsl */`
@@ -249,60 +250,54 @@ export class ParticleRenderer {
     this._granColor = new THREE.Color();
   }
 
-  /** Call each frame with the current MPM state. */
-  update(mpm, camW, camH) {
-    const { px, py, pz, pMt, pT, nP } = mpm;
-
-    /* Resize splat to be resolution-independent */
+  /**
+   * Call each frame with the latest physics snapshot.
+   * @param {number} count
+   * @param {Float32Array} data   stride 5 per particle: x,y,z,matId,tempK
+   * @param {number} camW @param {number} camH
+   */
+  update(count, data, camW, camH) {
     this._fluidMat.uniforms.resolution.value.set(camW, camH);
 
+    const FLU = this._FLUID_IDS, EL = this._ELASTIC_IDS;
+    const fPos = this._fPos, fHeat = this._fHeat, fMat = this._fMat;
     let fi=0, si=0, gi=0;
 
-    for (let p=0; p<nP; p++) {
-      const mt = pMt[p];
-      const T  = pT[p];
+    for (let p=0; p<count; p++) {
+      const o  = p*5;
+      const x  = data[o], y = data[o+1], z = data[o+2];
+      const mt = data[o+3] | 0;
+      const T  = data[o+4];
       const heat = this._normaliseHeat(mt, T);
 
-      if (this._FLUID_IDS.has(mt)) {
-        const base = fi*3;
-        this._fPos[base]   = px[p];
-        this._fPos[base+1] = py[p];
-        this._fPos[base+2] = pz[p];
-        this._fHeat[fi] = heat;
-        this._fMat[fi]  = mt;
-        fi++;
-      } else if (this._ELASTIC_IDS.has(mt)) {
-        this._dummy.position.set(px[p], py[p], pz[p]);
+      if (FLU.has(mt)) {
+        const b = fi*3;
+        fPos[b]=x; fPos[b+1]=y; fPos[b+2]=z;
+        fHeat[fi]=heat; fMat[fi]=mt; fi++;
+      } else if (EL.has(mt)) {
+        this._dummy.position.set(x,y,z);
         this._dummy.updateMatrix();
         this._solidMesh.setMatrixAt(si, this._dummy.matrix);
-        this._solidIH.array[si] = heat;
-        this._solidIM.array[si] = mt;
-        si++;
+        this._solidIH.array[si]=heat; this._solidIM.array[si]=mt; si++;
       } else { /* granular */
-        this._dummy.position.set(px[p], py[p], pz[p]);
+        this._dummy.position.set(x,y,z);
         this._dummy.updateMatrix();
         this._granMesh.setMatrixAt(gi, this._dummy.matrix);
-        /* Temperature-tinted color for granular */
         const m = MATERIALS[mt];
         const r=(m.col>>16&0xff)/255, g2=(m.col>>8&0xff)/255, b2=(m.col&0xff)/255;
-        const hot = heat * 0.5;
+        const hot = heat*0.5;
         this._granMesh.setColorAt(gi, this._granColor.setRGB(
-          Math.min(1,r+hot), Math.max(0,g2-hot*0.3), Math.max(0,b2-hot*0.5)
-        ));
+          Math.min(1,r+hot), Math.max(0,g2-hot*0.3), Math.max(0,b2-hot*0.5)));
         gi++;
       }
     }
 
-    /* Fluid Points */
-    this._fluidGeo.setAttribute('position', new this.THREE.BufferAttribute(this._fPos, 3));
-    this._fluidGeo.setAttribute('aHeat',    new this.THREE.BufferAttribute(this._fHeat,1));
-    this._fluidGeo.setAttribute('aMat',     new this.THREE.BufferAttribute(this._fMat, 1));
+    /* Fluid Points — reuse existing attributes, just flag for upload */
     this._fluidGeo.setDrawRange(0, fi);
     this._fluidGeo.attributes.position.needsUpdate = true;
     this._fluidGeo.attributes.aHeat.needsUpdate    = true;
     this._fluidGeo.attributes.aMat.needsUpdate     = true;
 
-    /* Solid InstancedMesh */
     this._solidMesh.count = si;
     if (si > 0) {
       this._solidMesh.instanceMatrix.needsUpdate = true;
@@ -310,7 +305,6 @@ export class ParticleRenderer {
       this._solidIM.needsUpdate = true;
     }
 
-    /* Granular InstancedMesh */
     this._granMesh.count = gi;
     if (gi > 0) {
       this._granMesh.instanceMatrix.needsUpdate = true;

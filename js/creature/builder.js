@@ -121,7 +121,8 @@ export class CreatureBuilder {
     this._selMat    = new THREE.MeshStandardMaterial({ color:0x00ff88, wireframe:false, emissive:0x002200 });
 
     this._onPointerDown = this._onPointerDown.bind(this);
-    this._onPointerMove = this._onPointerMove.bind(this);
+    this._onPointerUp   = this._onPointerUp.bind(this);
+    this._downXY = null;
 
     this._gizmoGroup = new THREE.Group();
     scene.add(this._gizmoGroup);
@@ -253,14 +254,14 @@ export class CreatureBuilder {
     this._meshGroup.visible = true;
     this._gizmoGroup.visible = true;
     this.dom.addEventListener('pointerdown', this._onPointerDown);
-    this.dom.addEventListener('pointermove', this._onPointerMove);
+    this.dom.addEventListener('pointerup',   this._onPointerUp);
   }
 
   disable() {
     this.active = false;
     this._gizmoGroup.visible = false;
     this.dom.removeEventListener('pointerdown', this._onPointerDown);
-    this.dom.removeEventListener('pointermove', this._onPointerMove);
+    this.dom.removeEventListener('pointerup',   this._onPointerUp);
   }
 
   setActivePart(type) { this.activePart = type; }
@@ -291,12 +292,21 @@ export class CreatureBuilder {
 
   _onPointerDown(e) {
     if (!this.active) return;
+    this._downXY = [e.clientX, e.clientY];
+  }
+
+  _onPointerUp(e) {
+    if (!this.active || !this._downXY) { this._downXY = null; return; }
+    const dx = e.clientX - this._downXY[0], dy = e.clientY - this._downXY[1];
+    this._downXY = null;
+    // Treat as a click only if the pointer barely moved (otherwise it was an
+    // orbit/pan drag and we must not place a part).
+    if (Math.sqrt(dx*dx + dy*dy) >= 8) return;
+
     const hitNodeId = this._pickNodeAtScreen(e);
     if (hitNodeId) {
-      // Select existing node
       this._select(hitNodeId);
     } else {
-      // Place a new part
       const pos = this._getPlacementPos(e);
       if (!pos) return;
       pos.y = Math.max(0, pos.y);
@@ -309,11 +319,15 @@ export class CreatureBuilder {
     }
   }
 
-  _onPointerMove(e) {
+  _unusedMove(e) {
     // Visual hover highlight (future: show placement ghost)
   }
 
   _select(id) {
+    // A mirror mesh reports "<id>_mirror"; map it back to the real node.
+    if (id && id.endsWith('_mirror')) id = id.slice(0, -'_mirror'.length);
+    if (id && !this.graph.nodes.has(id)) id = null;
+
     // Deselect previous
     if (this.selectedId) {
       const prev = this.graph.nodes.get(this.selectedId);
@@ -322,8 +336,14 @@ export class CreatureBuilder {
     this.selectedId = id;
     if (id) {
       const node = this.graph.nodes.get(id);
-      if (node?.mesh) node.mesh.material = this._selMat.clone();
-      this._gizmoGroup.position.copy(node.mesh.position);
+      if (node?.mesh) {
+        node.mesh.material = this._selMat.clone();
+        this._gizmoGroup.position.copy(node.mesh.position);
+        // Sync the scale slider to the selected part
+        const sl = document.getElementById('part-scale');
+        if (sl) { sl.value = node.scale; sl.dataset.prev = node.scale;
+          const lab = document.getElementById('scale-val'); if (lab) lab.textContent = node.scale.toFixed(1); }
+      }
     }
     this._emitChange();
   }

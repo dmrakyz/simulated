@@ -7,14 +7,15 @@
  *   SIMULATE — drop creature into world and run physics
  */
 
-import { MPM, MATERIALS, K } from './mpm.js';
+import { MATERIALS }        from './mpm.js';
+import { SimController }     from './sim-controller.js';
 import { ParticleRenderer }  from './rendering/particle-renderer.js';
 import { CreatureBuilder }   from './creature/builder.js';
 
 /* ── Device tier ──────────────────────────────────────────────── */
 const _cores  = navigator.hardwareConcurrency || 4;
 const _isDesk = window.matchMedia('(pointer:fine)').matches && _cores >= 8;
-const MAXP    = _isDesk ? 30000 : 13000;
+const MAXP    = _isDesk ? 300000 : 60000;
 const SUBS    = 5;
 
 /* ── Loading helpers ──────────────────────────────────────────── */
@@ -99,13 +100,13 @@ async function main() {
     } catch(e) { composer=null; }
   }
 
-  /* 9 ── MPM */
-  let mpm;
-  { const r=ldStep('MPM engine…');
+  /* 9 ── Physics engine (worker-backed, main-thread fallback) */
+  const sim = new SimController();
+  { const r=ldStep('Physics engine…');
     try {
-      mpm=new MPM({ gridN:48, dx:0.25, maxParticles:MAXP, substeps:SUBS });
-      ldOk(r,`Grid ${mpm.N}³ · domain ${mpm.DOMAIN.toFixed(1)} m · max ${mpm.MAX}`);
-    } catch(e) { ldFail(r,'MPM failed: '+e.message); return; } }
+      const where = await sim.init({ gridN:48, dx:0.25, maxParticles:MAXP, substeps:SUBS });
+      ldOk(r, `MLS-MPM on ${where==='worker'?'Web Worker':'main thread'} · domain ${sim.DOMAIN.toFixed(1)} m · max ${MAXP.toLocaleString()}`);
+    } catch(e) { ldFail(r,'Physics failed: '+e.message); return; } }
 
   /* 10 ── Particle renderer */
   let partRenderer;
@@ -116,12 +117,11 @@ async function main() {
   /* 11 ── Demo scene */
   { const r=ldStep('Spawning demo…');
     try {
-      const d=mpm.DOMAIN;
-      mpm.spawnBox(d*.42, d*.45, d*.42, d*.58, d*.62, d*.58, 7);   // ice block
-      mpm.spawnBox(d*.22, d*.04, d*.22, d*.78, d*.20, d*.78, 0);   // water
-      ldOk(r, `${mpm.nP} particles`);
-    } catch(e) { ldWarn(r,'Spawn: '+e.message); }
-    document.getElementById('hpc').textContent = mpm.nP; }
+      const d=sim.DOMAIN;
+      sim.spawnBox(d*.42, d*.45, d*.42, d*.58, d*.62, d*.58, 7);   // ice block
+      sim.spawnBox(d*.22, d*.04, d*.22, d*.78, d*.20, d*.78, 0);   // water
+      ldOk(r, 'demo queued');
+    } catch(e) { ldWarn(r,'Spawn: '+e.message); } }
 
   /* 12 ── Creature builder */
   let builder;
@@ -129,6 +129,9 @@ async function main() {
     try {
       const canvas=document.getElementById('c');
       builder=new CreatureBuilder(THREE, scene, cam, renderer, canvas);
+      // Inject the part palette now, before UI wiring queries its buttons.
+      const inner=document.getElementById('build-panel-inner');
+      if (inner) inner.innerHTML = CreatureBuilder.buildPartPanelHTML();
       ldOk(r);
     } catch(e) { ldWarn(r,'Builder: '+e.message); } }
 
@@ -136,13 +139,13 @@ async function main() {
   const simP = { gravity:-9.8, substeps:SUBS, domain:true, heatRadius:1.0 };
   if (GUI) {
     const r=ldStep('Properties GUI…');
-    try { buildGUI(GUI, simP, mpm, domHelper); ldOk(r); }
+    try { buildGUI(GUI, simP, sim, domHelper); ldOk(r); }
     catch(e) { ldWarn(r,'GUI: '+e.message); }
   }
 
   /* 14 ── UI events */
   { const r=ldStep('Wiring UI…');
-    try { wireUI(THREE, mpm, cam, tapMesh, simP, builder); ldOk(r); }
+    try { wireUI(THREE, sim, cam, tapMesh, simP, builder); ldOk(r); }
     catch(e) { ldWarn(r,'UI: '+e.message); } }
 
   ldOk(ldStep(''),'Running ✓');
@@ -164,19 +167,25 @@ async function main() {
   };
   new ResizeObserver(resizeComposer).observe(document.getElementById('c'));
 
+  let _lastGrav=null, _lastSub=null;
+
   function tick(t) {
     requestAnimationFrame(tick);
 
-    mpm.gravity = simP.gravity;
-    mpm.sub     = Math.round(simP.substeps);
+    /* Push parameter changes to the sim (only when they change) */
+    if (simP.gravity !== _lastGrav) { sim.setGravity(simP.gravity); _lastGrav = simP.gravity; }
+    const sb = Math.round(simP.substeps);
+    if (sb !== _lastSub) { sim.setSubsteps(sb); _lastSub = sb; }
 
-    try { mpm.tick(); } catch(e) { console.error('MPM tick:', e.message); }
+    /* Main-thread fallback advances the sim here; worker advances itself. */
+    if (!sim.isWorker) sim.stepLocal();
+
     if (orbit) orbit.update();
 
-    /* Particle renderer update */
+    /* Particle renderer */
     const cv = document.getElementById('c');
-    if (partRenderer) {
-      try { partRenderer.update(mpm, cv.clientWidth, cv.clientHeight); }
+    if (partRenderer && sim.count > 0) {
+      try { partRenderer.update(sim.count, sim.snapshot, cv.clientWidth, cv.clientHeight); }
       catch(_){}
     }
 
@@ -184,28 +193,19 @@ async function main() {
     if (composer) { try { composer.render(); } catch(_){ renderer.render(scene, cam); } }
     else renderer.render(scene, cam);
 
-    /* HUD updates (throttled) */
+    /* HUD (throttled) */
     _fc++;
     if (t - _lastFpsT > 700) {
       fpsEl.textContent = Math.round(_fc/(t-_lastFpsT)*1000);
-      pcEl.textContent  = mpm.nP;
-      // Show avg temperature of selected material
+      pcEl.textContent  = sim.count.toLocaleString();
       if (tempEl) {
-        const avgT = sampleAvgTemp(mpm);
+        const avgT = sim.avgTemp();
         tempEl.textContent = avgT !== null ? (avgT-273).toFixed(0)+'°C' : '--';
       }
       _fc=0; _lastFpsT=t;
     }
   }
   requestAnimationFrame(tick);
-}
-
-function sampleAvgTemp(mpm) {
-  if (!mpm.nP) return null;
-  let sum=0, count=0;
-  const step = Math.max(1, Math.floor(mpm.nP/200));
-  for (let p=0; p<mpm.nP; p+=step) { sum+=mpm.pT[p]; count++; }
-  return count ? sum/count : null;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -292,22 +292,23 @@ async function buildScene(THREE, OrbitControls, Sky, renderer) {
 /* ══════════════════════════════════════════════════════════════
    GUI
    ══════════════════════════════════════════════════════════════ */
-function buildGUI(GUI, simP, mpm, domHelper) {
+function buildGUI(GUI, simP, sim, domHelper) {
   const gui=new GUI({ container:document.getElementById('gui-root'), width:220, title:'Settings' });
   gui.add(simP,'gravity',-25,0,0.1).name('Gravity m/s²');
   gui.add(simP,'substeps',3,12,1).name('Substeps/frame');
   gui.add(simP,'domain').name('Domain box').onChange(v=>{domHelper.visible=v;});
   gui.add(simP,'heatRadius',0.5,5,0.1).name('Heat radius');
 
-  const heat = { add:()=>mpm.addHeat(mpm.DOMAIN/2, mpm.DOMAIN/2, mpm.DOMAIN/2, simP.heatRadius, 80),
-                 rem:()=>mpm.addHeat(mpm.DOMAIN/2, mpm.DOMAIN/2, mpm.DOMAIN/2, simP.heatRadius,-80) };
+  const c = sim.DOMAIN/2;
+  const heat = { add:()=>sim.addHeat(c,c,c, simP.heatRadius, 80),
+                 rem:()=>sim.addHeat(c,c,c, simP.heatRadius,-80) };
   gui.add(heat,'add').name('🔥 Add heat (centre)');
   gui.add(heat,'rem').name('❄ Remove heat (centre)');
 
   const actions={
-    reset(){ mpm.reset(); document.getElementById('hpc').textContent=0; },
-    water(){ spawnRandom(mpm,0); }, sand(){ spawnRandom(mpm,1); },
-    lava(){ spawnRandom(mpm,2); }, air(){ spawnRandom(mpm,8); },
+    reset(){ sim.reset(); },
+    water(){ spawnRandom(sim,0); }, sand(){ spawnRandom(sim,1); },
+    lava(){ spawnRandom(sim,2); }, air(){ spawnRandom(sim,8); },
   };
   gui.add(actions,'reset').name('⟳ Reset');
   const spawn=gui.addFolder('Spawn material');
@@ -315,19 +316,18 @@ function buildGUI(GUI, simP, mpm, domHelper) {
   spawn.add(actions,'lava').name('Lava');   spawn.add(actions,'air').name('Air');
 }
 
-function spawnRandom(mpm, matId) {
-  const d=mpm.DOMAIN, hs=1.0;
+function spawnRandom(sim, matId) {
+  const d=sim.DOMAIN, hs=1.0;
   const cx=hs+Math.random()*(d-hs*2), cz=hs+Math.random()*(d-hs*2);
   const top=d*0.55;
-  mpm.spawnBox(cx-hs,top-hs*2,cz-hs, cx+hs,top,cz+hs, matId);
-  document.getElementById('hpc').textContent=mpm.nP;
+  sim.spawnBox(cx-hs,top-hs*2,cz-hs, cx+hs,top,cz+hs, matId);
 }
 
 /* ══════════════════════════════════════════════════════════════
    UI wiring
    ══════════════════════════════════════════════════════════════ */
-function wireUI(THREE, mpm, cam, tapMesh, simP, builder) {
-  const DOM=mpm.DOMAIN;
+function wireUI(THREE, sim, cam, tapMesh, simP, builder) {
+  const DOM=sim.DOMAIN;
   let activeMat=0, spawnSize=1.5;
   let mode='world';  // 'world' | 'build' | 'simulate'
 
@@ -396,7 +396,7 @@ function wireUI(THREE, mpm, cam, tapMesh, simP, builder) {
   if (szEl) szEl.addEventListener('input',e=>{ spawnSize=+e.target.value; document.getElementById('size-label').textContent=spawnSize; });
 
   /* ── FAB spawn ─────────────────────────────────────────────── */
-  document.getElementById('fab-spawn')?.addEventListener('click',()=>spawnRandom(mpm,activeMat));
+  document.getElementById('fab-spawn')?.addEventListener('click',()=>spawnRandom(sim,activeMat));
 
   /* ── Heat brush (hold H + tap) ─────────────────────────────── */
   let heatMode=false, heatDir=1;
@@ -420,14 +420,13 @@ function wireUI(THREE, mpm, cam, tapMesh, simP, builder) {
       if (hits.length) {
         const pt=hits[0].point;
         if (heatMode) {
-          mpm.addHeat(pt.x, pt.y, pt.z, simP.heatRadius, 120*heatDir);
+          sim.addHeat(pt.x, pt.y, pt.z, simP.heatRadius, 120*heatDir);
         } else {
           const hs=spawnSize/2;
           const cx=Math.max(hs+.5,Math.min(DOM-hs-.5,pt.x));
           const cz=Math.max(hs+.5,Math.min(DOM-hs-.5,pt.z));
           const cy=Math.min(DOM-hs-.5, pt.y+spawnSize*1.5);
-          mpm.spawnBox(cx-hs,cy-spawnSize,cz-hs, cx+hs,cy,cz+hs, activeMat);
-          document.getElementById('hpc').textContent=mpm.nP;
+          sim.spawnBox(cx-hs,cy-spawnSize,cz-hs, cx+hs,cy,cz+hs, activeMat);
         }
       }
     }
