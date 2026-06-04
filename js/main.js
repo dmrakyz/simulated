@@ -245,7 +245,9 @@ async function buildScene(THREE, OrbitControls, Sky, renderer) {
   sun.shadow.camera.left=sun.shadow.camera.bottom=-20;
   sun.shadow.camera.right=sun.shadow.camera.top=20;
   scene.add(sun);
-  scene.add(Object.assign(new THREE.DirectionalLight(0x6688ff,0.45), { position: new THREE.Vector3(-15,10,-10) }));
+  const fill = new THREE.DirectionalLight(0x6688ff, 0.45);
+  fill.position.set(-15, 10, -10);
+  scene.add(fill);
 
   /* Sky or fallback */
   if (Sky) {
