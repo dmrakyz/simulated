@@ -143,7 +143,8 @@ async function main() {
     const row = ldStep('Spawning initial water volume…');
     try {
       const d = mpm.DOMAIN;
-      mpm.spawnBox(d*0.25, d*0.5, d*0.25,  d*0.75, d*0.85, d*0.75,  0);
+      // Spawn near the bottom so particles settle gently rather than slamming down
+      mpm.spawnBox(d*0.25, d*0.04, d*0.25,  d*0.75, d*0.30, d*0.75,  0);
       document.getElementById('hpc').textContent = mpm.nP;
       ldOk(row, `${mpm.nP} particles spawned`);
     } catch (e) {
@@ -383,7 +384,9 @@ function spawnRandom(mpm, matId) {
   const d = mpm.DOMAIN, hs = 1.0;
   const cx = hs + Math.random() * (d - hs * 2);
   const cz = hs + Math.random() * (d - hs * 2);
-  mpm.spawnBox(cx-hs, d*0.7, cz-hs, cx+hs, d*0.85, cz+hs, matId);
+  // Spawn just above existing particles so there is no violent impact
+  const top = d * 0.55;
+  mpm.spawnBox(cx-hs, top - hs*2, cz-hs, cx+hs, top, cz+hs, matId);
   document.getElementById('hpc').textContent = mpm.nP;
 }
 

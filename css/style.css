@@ -10,7 +10,9 @@ html, body {
   background: #060810;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   color: #fff;
-  touch-action: none;
+  /* NOTE: touch-action must NOT be 'none' here — that suppresses click
+     event synthesis on iOS/Android for all child elements (buttons, etc).
+     Only the canvas needs it (so OrbitControls can handle gestures). */
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -32,6 +34,7 @@ html, body {
 canvas {
   display: block;
   width: 100%; height: 100%;
+  touch-action: none; /* needed for OrbitControls gesture handling */
 }
 
 /* ── Toolbar ────────────────────────────────────────────── */

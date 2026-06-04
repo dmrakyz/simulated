@@ -8,7 +8,7 @@
 
 export const MATERIALS = [
   // id 0: Water
-  { name:'Water',  col:0x2288ff, rho:1000, k:500,  damp:1.000, type:'fluid' },
+  { name:'Water',  col:0x2288ff, rho:1000, k:150,  damp:0.9985, type:'fluid' },
   // id 1: Sand
   { name:'Sand',   col:0xddbb55, rho:1650, k:20,   damp:0.960, type:'granular' },
   // id 2: Lava
@@ -133,11 +133,14 @@ export class MPM {
 
       /*
        * Isotropic Kirchhoff stress scale for this particle.
-       * τ = k*(J-1)*I  →  stress affine scale = -4*dt*Vp/(dx²) * k*(J-1)
-       * where Vp = m/rho (per unit mass, so we divide by rho)
-       * Sign: compressed (J<1) → k*(J-1)<0 → ss>0 → pushes particles apart ✓
+       * Fluids/granular: one-sided (compression only) — no tensile restoring
+       * force that would cause spurious "breathing" oscillations.
+       * Elastic/snow: two-sided so the material resists both stretch and compression.
        */
-      const ss = -DT * (1.0 / mat.rho) * 4.0 * INV * INV * mat.k * (J - 1.0);
+      const jDev = (mat.type === 'fluid' || mat.type === 'granular')
+        ? Math.min(0.0, J - 1.0)
+        : (J - 1.0);
+      const ss = -DT * (1.0 / mat.rho) * 4.0 * INV * INV * mat.k * jDev;
 
       const xp = px[p], yp = py[p], zp = pz[p];
 
@@ -277,7 +280,7 @@ export class MPM {
       if (MATERIALS[pMt[p]].type === 'granular') {
         newJ = Math.min(newJ, 1.0);
       }
-      pJ[p] = Math.max(0.05, Math.min(20.0, newJ));
+      pJ[p] = Math.max(0.5, Math.min(3.0, newJ));
 
       /* advect */
       let npx = xp + DT * nvx;
