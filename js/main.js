@@ -46,6 +46,15 @@ function hideLoader() {
   setTimeout(() => { ldEl.style.display = 'none'; }, 500);
 }
 
+/* ── Device-tiered particle budget ──────────────────────────────────
+   The solver is single-threaded CPU JS, so the cap is a performance
+   ceiling (P2G + G2P are O(particles × 27) per substep × 8 substeps).
+   Desktops with many cores get a far higher budget than phones. */
+const _cores    = navigator.hardwareConcurrency || 4;
+const _isDesk   = window.matchMedia('(pointer:fine)').matches && _cores >= 8;
+const MAXP      = _isDesk ? 30000 : 13000;
+const SUBSTEPS  = 5;   // CFL-stable for the tuned stiffnesses; lower = faster
+
 /* ── Bootstrap ──────────────────────────────────────────────────── */
 async function main() {
   let THREE, OrbitControls, Sky, GUI;
@@ -122,7 +131,7 @@ async function main() {
   }
 
   /* 6 ─ Build 3D scene ────────────────────────────────────────── */
-  const sceneResult = await buildScene(THREE, OrbitControls, Sky, renderer);
+  const sceneResult = await buildScene(THREE, OrbitControls, Sky, renderer, MAXP);
   const { scene, cam, orbit, tapMesh, domHelper, partMesh, MAT_COLS } = sceneResult;
 
   /* 7 ─ MPM engine ────────────────────────────────────────────── */
@@ -130,7 +139,7 @@ async function main() {
   {
     const row = ldStep('Initializing MPM physics engine…');
     try {
-      mpm = new MPM({ gridN: 48, dx: 0.25, maxParticles: 14000, substeps: 6 });
+      mpm = new MPM({ gridN: 48, dx: 0.25, maxParticles: MAXP, substeps: SUBSTEPS });
       ldOk(row, `Grid ${mpm.N}³ · domain ${mpm.DOMAIN.toFixed(1)} m · max ${mpm.MAX} particles`);
     } catch (e) {
       ldFail(row, 'MPM init failed: ' + e.message);
@@ -140,11 +149,14 @@ async function main() {
 
   /* 8 ─ Initial particles ─────────────────────────────────────── */
   {
-    const row = ldStep('Spawning initial water volume…');
+    const row = ldStep('Spawning demo scene…');
     try {
       const d = mpm.DOMAIN;
-      // Spawn near the bottom so particles settle gently rather than slamming down
-      mpm.spawnBox(d*0.25, d*0.04, d*0.25,  d*0.75, d*0.30, d*0.75,  0);
+      // Stiff ICE block first (small, ~1.5k) so it always fits the budget,
+      // dropped above the pool to show that solids hold their shape …
+      mpm.spawnBox(d*0.42, d*0.45, d*0.42,  d*0.58, d*0.62, d*0.58,  7);
+      // … then a shallow water puddle that fills the rest and settles flat.
+      mpm.spawnBox(d*0.22, d*0.04, d*0.22,  d*0.78, d*0.20, d*0.78,  0);
       document.getElementById('hpc').textContent = mpm.nP;
       ldOk(row, `${mpm.nP} particles spawned`);
     } catch (e) {
@@ -153,7 +165,7 @@ async function main() {
   }
 
   /* 9 ─ Properties GUI ────────────────────────────────────────── */
-  const simP = { gravity: -9.8, substeps: 6, domain: true };
+  const simP = { gravity: -9.8, substeps: SUBSTEPS, domain: true };
   if (GUI) {
     const row = ldStep('Building GUI…');
     try {
@@ -228,7 +240,7 @@ async function main() {
 /* ══════════════════════════════════════════════════════════════════
    Scene builder
    ══════════════════════════════════════════════════════════════════ */
-async function buildScene(THREE, OrbitControls, Sky, renderer) {
+async function buildScene(THREE, OrbitControls, Sky, renderer, maxP) {
   const row    = ldStep('Building 3D scene…');
   const canvas = document.getElementById('c');
   const DOM    = 48 * 0.25; // gridN * dx = 12 m
@@ -326,11 +338,11 @@ async function buildScene(THREE, OrbitControls, Sky, renderer) {
   scene.add(tapMesh);
 
   /* Particle InstancedMesh */
-  const partGeo  = new THREE.SphereGeometry(0.12, 6, 4);
+  const partGeo  = new THREE.SphereGeometry(0.11, 6, 4);
   const partMatM = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: 0.4, metalness: 0.05,
   });
-  const partMesh = new THREE.InstancedMesh(partGeo, partMatM, 14000);
+  const partMesh = new THREE.InstancedMesh(partGeo, partMatM, maxP);
   partMesh.count      = 0;
   partMesh.castShadow = false;
   scene.add(partMesh);
@@ -365,7 +377,7 @@ function buildGUI(GUI, simP, mpm, domHelper) {
   });
 
   gui.add(simP, 'gravity', -25, 0, 0.1).name('Gravity m/s²');
-  gui.add(simP, 'substeps', 1, 16, 1).name('Substeps/frame');
+  gui.add(simP, 'substeps', 4, 16, 1).name('Substeps/frame');
   gui.add(simP, 'domain').name('Domain box').onChange(v => { domHelper.visible = v; });
 
   const actions = {
