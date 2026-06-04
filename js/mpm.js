@@ -1,125 +1,153 @@
 /**
- * MLS-MPM Physics Engine (Moving Least Squares Material Point Method)
- * Hu et al. 2018 — CPU implementation, fully self-contained, no external deps.
+ * MLS-MPM Physics Engine — with heat, phase transitions, air/steam.
+ * Hu et al. 2018 (MLS-MPM), CPU implementation, no external deps.
  *
- * Unified solver for:
- *   fluid     — weakly-compressible EOS, one-sided pressure (water, lava, honey, oil)
- *   granular  — fluid EOS w/ no tension + internal friction (sand, mud)
- *   elastic   — fixed-corotated (neo-Hookean-ish) via polar decomposition (rubber/ice/snow)
+ * HEAT SYSTEM
+ * -----------
+ *  Each particle carries a temperature T (Kelvin).
+ *  P2G scatters mass-weighted temperature to the grid.
+ *  G2P gathers the grid temperature average back (= thermal diffusion).
+ *  Phase transitions (water→ice, ice→water, lava→rock, etc.) run after G2P.
+ *  Temperature-dependent viscosity (cScale) and stiffness (E) are pre-computed
+ *  once per substep into per-particle typed arrays to keep the hot P2G/G2P loops
+ *  branch-free.
  *
- * IMPORTANT physical notes:
- *  - Each particle carries a REAL mass (p_vol * density), so dense materials
- *    generate more momentum and sink through lighter ones (buoyancy emerges).
- *  - Stiffness E is in physically-meaningful Pa-scale (~1e5..1e6). With explicit
- *    time integration this requires enough substeps to satisfy the CFL limit
- *    dt < dx / sqrt(E/rho). The engine uses 8 substeps/frame by default.
- *  - Collision/incompressibility is NOT particle-particle; it emerges from the
- *    grid: when particles crowd a cell, density rises (J<1), pressure builds, and
- *    the pressure gradient pushes them apart. Weak E => particles pancake. Correct
- *    E => stacks hold their shape and pool/pile realistically.
- *  - Damping is done by scaling the APIC affine matrix C (acts like viscosity /
- *    internal friction) — NOT by multiplying linear velocity, which would break
- *    free-fall and make heavy materials look like slow-motion.
+ * MATERIALS
+ * ---------
+ *  0 Water   1 Sand   2 Lava   3 Snow   4 Honey
+ *  5 Mud     6 Oil    7 Ice    8 Air    9 Steam
  */
 
-/* ── Material table ───────────────────────────────────────────────────
- *  rho    : density            (kg/m³)
- *  E      : Young's modulus / bulk stiffness (Pa, tuned for explicit stability)
- *  nu     : Poisson ratio      (elastic only)
- *  type   : 'fluid' | 'granular' | 'elastic'
- *  cScale : APIC C retention per substep (1 = inviscid, lower = viscous/sticky)
- *  vdamp  : linear velocity retention (near 1.0; only a gentle stabiliser)
- */
-/* type codes: 0 = fluid, 1 = granular, 2 = elastic */
+/* ── Kelvin constants ─────────────────────────────────────────── */
+export const K = {
+  AMBIENT: 293,   // 20 °C
+  FREEZE:  273,   // 0 °C
+  BOIL:    373,   // 100 °C
+  ICE:     258,   // -15 °C
+  LAVA:    1200,
+  SOLIDIFY:900,
+};
+
+/* type codes: 0=fluid  1=granular  2=elastic */
+const TC = { fluid:0, granular:1, elastic:2 };
+
 export const MATERIALS = [
-  // id 0: Water — thin, inviscid, pools flat
-  { name:'Water', col:0x2299ff, rho:1000, E:7.0e5, type:'fluid',    cScale:1.00, vdamp:1.000 },
-  // id 1: Sand — granular, piles at an angle of repose
-  { name:'Sand',  col:0xd9b25f, rho:1600, E:5.0e5, type:'granular', cScale:0.20, vdamp:0.998 },
-  // id 2: Lava — dense, very viscous fluid
-  { name:'Lava',  col:0xff5522, rho:3100, E:8.0e5, type:'fluid',    cScale:0.45, vdamp:0.992 },
-  // id 3: Snow — light, soft elastic that compacts
-  { name:'Snow',  col:0xeef3ff, rho:400,  E:1.2e5, nu:0.20, type:'elastic', cScale:1.00, vdamp:0.999 },
-  // id 4: Honey — heavy, very viscous fluid (slow ribbons)
-  { name:'Honey', col:0xffb022, rho:1400, E:6.0e5, type:'fluid',    cScale:0.30, vdamp:0.992 },
-  // id 5: Mud — granular + sticky
-  { name:'Mud',   col:0x7a5a38, rho:1800, E:4.0e5, type:'granular', cScale:0.28, vdamp:0.996 },
-  // id 6: Oil — light, mildly viscous fluid
-  { name:'Oil',   col:0x3c3a22, rho:900,  E:6.0e5, type:'fluid',    cScale:0.80, vdamp:0.997 },
-  // id 7: Ice — stiff elastic, holds its shape and bounces
-  // (E capped at 8e5 so the elastic wave speed stays CFL-stable at 5 substeps)
-  { name:'Ice',   col:0xaadcff, rho:917,  E:8.0e5, nu:0.32, type:'elastic', cScale:1.00, vdamp:1.000 },
+  // ── 0: Water ───────────────────────────────────────────────────
+  { name:'Water', col:0x2299ff, rho:1000, E:7e5,
+    type:'fluid',    cScale:1.00, vdamp:1.000,
+    T_init:K.AMBIENT, cond:0.14,
+    cScale_cold:0.88, T_visc_cold:K.FREEZE,
+    cScale_hot: 1.00, T_visc_hot: K.BOIL,
+    T_solidify: K.FREEZE, solidifyTo:7,
+    T_vaporize: K.BOIL,   vaporizeTo:9,
+  },
+  // ── 1: Sand ────────────────────────────────────────────────────
+  { name:'Sand',  col:0xd9b25f, rho:1600, E:5e5,
+    type:'granular', cScale:0.20, vdamp:0.998,
+    T_init:K.AMBIENT, cond:0.04,
+  },
+  // ── 2: Lava ────────────────────────────────────────────────────
+  { name:'Lava',  col:0xff5522, rho:3100, E:8e5,
+    type:'fluid',    cScale:0.50, vdamp:0.992,
+    T_init:K.LAVA, cond:0.06,
+    cScale_cold:0.04, T_visc_cold:K.SOLIDIFY,
+    cScale_hot: 0.55, T_visc_hot: K.LAVA,
+    T_solidify: K.SOLIDIFY, solidifyTo:1,  // cools → rock/sand
+  },
+  // ── 3: Snow ────────────────────────────────────────────────────
+  { name:'Snow',  col:0xeef3ff, rho:400,  E:1.2e5, nu:0.20,
+    type:'elastic',  cScale:1.00, vdamp:0.999,
+    T_init:K.ICE, cond:0.07,
+    T_vaporize:K.FREEZE, vaporizeTo:0,  // melts → water
+  },
+  // ── 4: Honey ───────────────────────────────────────────────────
+  { name:'Honey', col:0xffb022, rho:1400, E:6e5,
+    type:'fluid',    cScale:0.30, vdamp:0.992,
+    T_init:K.AMBIENT, cond:0.09,
+    cScale_cold:0.12, T_visc_cold:275,
+    cScale_hot: 0.68, T_visc_hot: 360,
+  },
+  // ── 5: Mud ─────────────────────────────────────────────────────
+  { name:'Mud',   col:0x7a5a38, rho:1800, E:4e5,
+    type:'granular', cScale:0.28, vdamp:0.996,
+    T_init:K.AMBIENT, cond:0.05,
+    T_vaporize:395, vaporizeTo:1,  // dries out → sand
+  },
+  // ── 6: Oil ─────────────────────────────────────────────────────
+  { name:'Oil',   col:0x3c3a22, rho:900,  E:6e5,
+    type:'fluid',    cScale:0.80, vdamp:0.997,
+    T_init:K.AMBIENT, cond:0.11,
+    cScale_cold:0.60, T_visc_cold:280,
+    cScale_hot: 0.96, T_visc_hot: 380,
+    T_vaporize:450, vaporizeTo:9,  // ignites/vaporises
+  },
+  // ── 7: Ice ─────────────────────────────────────────────────────
+  { name:'Ice',   col:0xaadcff, rho:917,  E:8e5, nu:0.32,
+    type:'elastic',  cScale:1.00, vdamp:1.000,
+    T_init:K.ICE, cond:0.22,
+    T_vaporize:K.FREEZE, vaporizeTo:0,  // melts → water
+  },
+  // ── 8: Air ─────────────────────────────────────────────────────
+  // rho boosted to 40 (real=1.2) so mass ratios stay CFL-stable.
+  // Buoyancy is still visually correct: 25× lighter than water.
+  { name:'Air',   col:0x88aacc, rho:40,  E:5e4,
+    type:'fluid',    cScale:1.00, vdamp:1.000,
+    T_init:K.AMBIENT, cond:0.03,
+    // thermal expansion: hot air gets a fake density reduction via extra upward push
+    thermalExpansion:0.003,
+  },
+  // ── 9: Steam ───────────────────────────────────────────────────
+  { name:'Steam', col:0xddeeff, rho:25,  E:3e4,
+    type:'fluid',    cScale:1.00, vdamp:1.000,
+    T_init:390, cond:0.02,
+    T_solidify:K.BOIL, solidifyTo:0,  // condenses → water
+  },
 ];
 
-const TYPE_CODE = { fluid: 0, granular: 1, elastic: 2 };
-
-/* Precompute Lamé parameters for elastic materials. */
+/* Precompute Lamé params for every material (elastic uses them, others don't). */
 for (const m of MATERIALS) {
   const nu = m.nu ?? 0.3;
   m._mu = m.E / (2 * (1 + nu));
   m._la = m.E * nu / ((1 + nu) * (1 - 2 * nu));
 }
 
-/* Module scratch for polar decomposition rotation factor R (row-major 3×3). */
+/* Polar decomposition scratch buffer. */
 const _R = new Float64Array(9);
 
-/**
- * Polar decomposition F = R·S  →  writes the orthogonal factor R into _R.
- * Iterates  R ← ½(R + R^{-T})  (Higham's Newton iteration), which converges
- * quadratically for F near the identity (our small-strain regime).
- */
 function polarR(F, o) {
-  let r0=F[o],   r1=F[o+1], r2=F[o+2],
-      r3=F[o+3], r4=F[o+4], r5=F[o+5],
-      r6=F[o+6], r7=F[o+7], r8=F[o+8];
-
-  for (let it = 0; it < 16; it++) {
-    const det = r0*(r4*r8-r5*r7) - r1*(r3*r8-r5*r6) + r2*(r3*r7-r4*r6);
-    if (Math.abs(det) < 1e-9) break;
-    const id = 1.0 / det;
-
-    // inverse of R (adjugate / det)
-    const i0=(r4*r8-r5*r7)*id, i1=(r2*r7-r1*r8)*id, i2=(r1*r5-r2*r4)*id;
-    const i3=(r5*r6-r3*r8)*id, i4=(r0*r8-r2*r6)*id, i5=(r2*r3-r0*r5)*id;
-    const i6=(r3*r7-r4*r6)*id, i7=(r1*r6-r0*r7)*id, i8=(r0*r4-r1*r3)*id;
-
-    // R^{-T} = transpose(inverse) ; average with R
-    const n0=0.5*(r0+i0), n1=0.5*(r1+i3), n2=0.5*(r2+i6),
-          n3=0.5*(r3+i1), n4=0.5*(r4+i4), n5=0.5*(r5+i7),
-          n6=0.5*(r6+i2), n7=0.5*(r7+i5), n8=0.5*(r8+i8);
-
-    const conv = Math.abs(n0-r0)+Math.abs(n4-r4)+Math.abs(n8-r8);
+  let r0=F[o],r1=F[o+1],r2=F[o+2],r3=F[o+3],r4=F[o+4],r5=F[o+5],r6=F[o+6],r7=F[o+7],r8=F[o+8];
+  for (let it=0; it<16; it++) {
+    const det = r0*(r4*r8-r5*r7)-r1*(r3*r8-r5*r6)+r2*(r3*r7-r4*r6);
+    if (Math.abs(det)<1e-9) break;
+    const id=1/det;
+    const i0=(r4*r8-r5*r7)*id,i1=(r2*r7-r1*r8)*id,i2=(r1*r5-r2*r4)*id;
+    const i3=(r5*r6-r3*r8)*id,i4=(r0*r8-r2*r6)*id,i5=(r2*r3-r0*r5)*id;
+    const i6=(r3*r7-r4*r6)*id,i7=(r1*r6-r0*r7)*id,i8=(r0*r4-r1*r3)*id;
+    const n0=.5*(r0+i0),n1=.5*(r1+i3),n2=.5*(r2+i6);
+    const n3=.5*(r3+i1),n4=.5*(r4+i4),n5=.5*(r5+i7);
+    const n6=.5*(r6+i2),n7=.5*(r7+i5),n8=.5*(r8+i8);
+    const cv=Math.abs(n0-r0)+Math.abs(n4-r4)+Math.abs(n8-r8);
     r0=n0;r1=n1;r2=n2;r3=n3;r4=n4;r5=n5;r6=n6;r7=n7;r8=n8;
-    if (conv < 1e-6) break;
+    if(cv<1e-6) break;
   }
   _R[0]=r0;_R[1]=r1;_R[2]=r2;_R[3]=r3;_R[4]=r4;_R[5]=r5;_R[6]=r6;_R[7]=r7;_R[8]=r8;
 }
 
+/* ══════════════════════════════════════════════════════════════ */
 export class MPM {
-  /**
-   * @param {object} opts
-   * @param {number} opts.gridN       cells per axis (default 48)
-   * @param {number} opts.dx          cell size in metres (default 0.25)
-   * @param {number} opts.maxParticles
-   * @param {number} opts.substeps    physics substeps per tick (>=8 recommended)
-   */
-  constructor(opts = {}) {
+  constructor(opts={}) {
     this.N    = opts.gridN        || 48;
     this.DX   = opts.dx           || 0.25;
     this.MAX  = opts.maxParticles || 24000;
-    this.sub  = opts.substeps     || 8;
+    this.sub  = opts.substeps     || 5;
     this.gravity = opts.gravity   ?? -9.8;
 
-    this.INV  = 1 / this.DX;
-    this.N3   = this.N * this.N * this.N;
+    this.INV    = 1 / this.DX;
+    this.N3     = this.N**3;
     this.DOMAIN = this.N * this.DX;
+    this.PVOL   = (this.DX * 0.5)**3;
+    this.DINV   = 4 * this.INV * this.INV;
 
-    /* Per-particle reference volume: 2 particles/cell/axis → 8 per cell,
-       each owns (dx/2)³. p_mass = PVOL * rho gives correct bulk density. */
-    this.PVOL = (this.DX * 0.5) ** 3;
-    this.DINV = 4.0 * this.INV * this.INV;   // quadratic B-spline D⁻¹
-
-    /* particle buffers */
     const M = this.MAX;
     this.px  = new Float32Array(M);
     this.py  = new Float32Array(M);
@@ -127,293 +155,323 @@ export class MPM {
     this.pvx = new Float32Array(M);
     this.pvy = new Float32Array(M);
     this.pvz = new Float32Array(M);
-    this.pC  = new Float32Array(M * 9);  // APIC affine velocity matrix
-    this.pF  = new Float32Array(M * 9);  // deformation gradient (elastic)
-    this.pJ  = new Float32Array(M);      // volume ratio (fluid/granular)
+    this.pC  = new Float32Array(M*9);
+    this.pF  = new Float32Array(M*9);
+    this.pJ  = new Float32Array(M);
     this.pMt = new Uint8Array(M);
+    this.pT  = new Float32Array(M);    // temperature (K)
     this.nP  = 0;
 
-    /* grid buffers (momentum stored first, converted to velocity in-place) */
     this.gM  = new Float32Array(this.N3);
     this.gVx = new Float32Array(this.N3);
     this.gVy = new Float32Array(this.N3);
     this.gVz = new Float32Array(this.N3);
+    this.gH  = new Float32Array(this.N3); // accumulated heat (mass×T)
+    this.gTV = new Float32Array(this.N3); // normalized grid temperature
 
-    /* reusable weight arrays to avoid per-iteration GC */
     this._WX = new Float32Array(3);
     this._WY = new Float32Array(3);
     this._WZ = new Float32Array(3);
 
-    /* Flatten material params into typed arrays indexed by material id.
-       Reading these in the hot loop avoids object-property megamorphism
-       and per-particle string comparisons (a big V8 speedup). */
+    /* Flat per-material typed arrays for hot-loop access */
     const NM = MATERIALS.length;
-    this._mType = new Uint8Array(NM);   // 0 fluid / 1 granular / 2 elastic
-    this._mMass = new Float64Array(NM); // PVOL * rho
+    this._mType = new Uint8Array(NM);
+    this._mMass = new Float64Array(NM);
     this._mE    = new Float64Array(NM);
     this._mMu   = new Float64Array(NM);
     this._mLa   = new Float64Array(NM);
-    this._mCs   = new Float64Array(NM); // cScale
+    this._mCs   = new Float64Array(NM); // base cScale
     this._mVd   = new Float64Array(NM); // vdamp
-    for (let i = 0; i < NM; i++) {
-      const m = MATERIALS[i];
-      this._mType[i] = TYPE_CODE[m.type] ?? 0;
+    this._mCond = new Float64Array(NM); // thermal conductivity rate
+    this._mThEx = new Float64Array(NM); // thermal expansion (air)
+    for (let i=0; i<NM; i++) {
+      const m=MATERIALS[i];
+      this._mType[i] = TC[m.type]??0;
       this._mMass[i] = this.PVOL * m.rho;
       this._mE[i]    = m.E;
       this._mMu[i]   = m._mu;
       this._mLa[i]   = m._la;
       this._mCs[i]   = m.cScale;
       this._mVd[i]   = m.vdamp;
+      this._mCond[i] = m.cond ?? 0;
+      this._mThEx[i] = m.thermalExpansion ?? 0;
+    }
+
+    /* Per-substep pre-computed effective properties (avoids inner-loop math) */
+    this._effE  = new Float64Array(M); // T-dependent E
+    this._effCs = new Float64Array(M); // T-dependent cScale
+    this._effMs = new Float64Array(M); // T-adjusted particle mass (buoyancy)
+  }
+
+  /* ── Spawn ─────────────────────────────────────────────────── */
+  spawnBox(x0,y0,z0,x1,y1,z1,matId,ppc=2) {
+    const step=this.DX/ppc, lo=1.5*this.DX, hi=(this.N-1.5)*this.DX;
+    const jitter=step*0.25;
+    const T_init = MATERIALS[matId]?.T_init ?? K.AMBIENT;
+    for (let x=x0;x<x1;x+=step) for (let y=y0;y<y1;y+=step) for (let z=z0;z<z1;z+=step) {
+      if (this.nP>=this.MAX) return;
+      const i=this.nP++;
+      this.px[i]=Math.max(lo,Math.min(hi,x+(Math.random()-.5)*jitter));
+      this.py[i]=Math.max(lo,Math.min(hi,y+(Math.random()-.5)*jitter));
+      this.pz[i]=Math.max(lo,Math.min(hi,z+(Math.random()-.5)*jitter));
+      this.pvx[i]=0; this.pvy[i]=0; this.pvz[i]=0;
+      this.pJ[i]=1; this.pMt[i]=matId; this.pT[i]=T_init;
+      const o=i*9;
+      this.pC[o]=0;this.pC[o+1]=0;this.pC[o+2]=0;
+      this.pC[o+3]=0;this.pC[o+4]=0;this.pC[o+5]=0;
+      this.pC[o+6]=0;this.pC[o+7]=0;this.pC[o+8]=0;
+      this.pF[o]=1;this.pF[o+1]=0;this.pF[o+2]=0;
+      this.pF[o+3]=0;this.pF[o+4]=1;this.pF[o+5]=0;
+      this.pF[o+6]=0;this.pF[o+7]=0;this.pF[o+8]=1;
     }
   }
 
-  /* ── Spawn helpers ──────────────────────────────────────── */
+  reset() { this.nP=0; }
 
-  /**
-   * Spawn a filled axis-aligned box of particles.
-   * ppc = particles per cell per axis (2 → matches PVOL mass calibration).
-   */
-  spawnBox(x0, y0, z0, x1, y1, z1, matId, ppc = 2) {
-    const step = this.DX / ppc;
-    const lo   = 1.5 * this.DX;
-    const hi   = (this.N - 1.5) * this.DX;
-    const jitter = step * 0.25;
-
-    for (let x = x0; x < x1; x += step) {
-      for (let y = y0; y < y1; y += step) {
-        for (let z = z0; z < z1; z += step) {
-          if (this.nP >= this.MAX) return;
-          const i = this.nP;
-          this.px[i] = Math.max(lo, Math.min(hi, x + (Math.random()-0.5)*jitter));
-          this.py[i] = Math.max(lo, Math.min(hi, y + (Math.random()-0.5)*jitter));
-          this.pz[i] = Math.max(lo, Math.min(hi, z + (Math.random()-0.5)*jitter));
-          this.pvx[i] = 0; this.pvy[i] = 0; this.pvz[i] = 0;
-          this.pJ[i]  = 1.0;
-          this.pMt[i] = matId;
-          const o = i * 9;
-          for (let c = 0; c < 9; c++) this.pC[o+c] = 0;
-          // F = identity
-          this.pF[o]=1; this.pF[o+1]=0; this.pF[o+2]=0;
-          this.pF[o+3]=0; this.pF[o+4]=1; this.pF[o+5]=0;
-          this.pF[o+6]=0; this.pF[o+7]=0; this.pF[o+8]=1;
-          this.nP++;
-        }
-      }
-    }
-  }
-
-  /** Remove all particles */
-  reset() { this.nP = 0; }
-
-  /* ── Physics tick ──────────────────────────────────────── */
-
+  /* ── Public tick ───────────────────────────────────────────── */
   tick() {
-    const DT = 1 / 60 / this.sub;
-    for (let s = 0; s < this.sub; s++) this._step(DT);
+    const DT=1/60/this.sub;
+    for (let s=0;s<this.sub;s++) this._step(DT);
   }
 
+  /* ── Single substep ────────────────────────────────────────── */
   _step(DT) {
-    const { N, INV, DX, PVOL, DINV,
-            px, py, pz, pvx, pvy, pvz, pC, pF, pJ, pMt, nP,
-            gM, gVx, gVy, gVz, _WX, _WY, _WZ,
-            _mType, _mMass, _mE, _mMu, _mLa, _mCs, _mVd } = this;
+    const { N,INV,DX,PVOL,DINV,
+            px,py,pz,pvx,pvy,pvz,pC,pF,pJ,pMt,pT,nP,
+            gM,gVx,gVy,gVz,gH,gTV,_WX,_WY,_WZ,
+            _mType,_mMass,_mE,_mMu,_mLa,_mCs,_mVd,_mCond,_mThEx,
+            _effE,_effCs,_effMs } = this;
     const coef = -DT * PVOL * DINV;
 
-    /* ── RESET GRID ────────────────────────────────────────── */
-    gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0);
-
-    /* ── P2G (particle → grid) ─────────────────────────────── */
-    for (let p = 0; p < nP; p++) {
-      const mt  = pMt[p];
-      const type = _mType[mt];
-      const pm  = _mMass[mt];              // real particle mass
-      const fo  = p * 9;
-
-      /* --- constitutive stress → affine matrix A = stressTerm + pm·C --- */
-      let A0,A1,A2,A3,A4,A5,A6,A7,A8;
-      const C0=pC[fo],   C1=pC[fo+1], C2=pC[fo+2];
-      const C3=pC[fo+3], C4=pC[fo+4], C5=pC[fo+5];
-      const C6=pC[fo+6], C7=pC[fo+7], C8=pC[fo+8];
-
-      if (type === 2) { /* elastic */
-        const f0=pF[fo],   f1=pF[fo+1], f2=pF[fo+2],
-              f3=pF[fo+3],  f4=pF[fo+4], f5=pF[fo+5],
-              f6=pF[fo+6],  f7=pF[fo+7], f8=pF[fo+8];
-        const J = f0*(f4*f8-f5*f7) - f1*(f3*f8-f5*f6) + f2*(f3*f7-f4*f6);
-
-        polarR(pF, fo);                    // → _R (rotation factor)
-        // M = F − R
-        const m0=f0-_R[0], m1=f1-_R[1], m2=f2-_R[2],
-              m3=f3-_R[3], m4=f4-_R[4], m5=f5-_R[5],
-              m6=f6-_R[6], m7=f7-_R[7], m8=f8-_R[8];
-        // P = M · Fᵀ
-        const p0=m0*f0+m1*f1+m2*f2, p1=m0*f3+m1*f4+m2*f5, p2=m0*f6+m1*f7+m2*f8;
-        const p3=m3*f0+m4*f1+m5*f2, p4=m3*f3+m4*f4+m5*f5, p5=m3*f6+m4*f7+m5*f8;
-        const p6=m6*f0+m7*f1+m8*f2, p7=m6*f3+m7*f4+m8*f5, p8=m6*f6+m7*f7+m8*f8;
-        // Kirchhoff stress τ = 2μ·(F−R)Fᵀ + λ·J·(J−1)·I
-        const mu2 = 2 * _mMu[mt];
-        const lj  = _mLa[mt] * J * (J - 1.0);
-        A0 = coef*(mu2*p0+lj) + pm*C0;  A1 = coef*(mu2*p1) + pm*C1;  A2 = coef*(mu2*p2) + pm*C2;
-        A3 = coef*(mu2*p3)    + pm*C3;  A4 = coef*(mu2*p4+lj) + pm*C4; A5 = coef*(mu2*p5) + pm*C5;
-        A6 = coef*(mu2*p6)    + pm*C6;  A7 = coef*(mu2*p7) + pm*C7;  A8 = coef*(mu2*p8+lj) + pm*C8;
+    /* ── Precompute T-dependent per-particle properties ──────── */
+    for (let p=0; p<nP; p++) {
+      const mt=pMt[p], T=pT[p];
+      const m=MATERIALS[mt];
+      // Temperature-dependent stiffness: elastic materials soften when hot
+      _effE[p] = _mE[mt];
+      // Temperature-dependent viscosity (cScale)
+      if (m.cScale_cold !== undefined) {
+        const t = Math.max(0, Math.min(1, (T - m.T_visc_cold) / (m.T_visc_hot - m.T_visc_cold)));
+        _effCs[p] = m.cScale_cold + t * (m.cScale_hot - m.cScale_cold);
       } else {
-        /* fluid / granular: isotropic pressure from volume ratio J.
-           One-sided: only compression (J<1) generates pressure — no tensile
-           "stickiness" that would make particles attract like magnets. */
-        const J = pJ[p];
-        let press = _mE[mt] * (J - 1.0);
-        if (press > 0) press = 0;          // no tension
-        const s = coef * press;            // scalar stress term
-        A0 = s + pm*C0;  A1 = pm*C1;     A2 = pm*C2;
-        A3 = pm*C3;      A4 = s + pm*C4; A5 = pm*C5;
-        A6 = pm*C6;      A7 = pm*C7;     A8 = s + pm*C8;
+        _effCs[p] = _mCs[mt];
+      }
+      // Temperature-adjusted effective mass for buoyancy of gas/air
+      // Hot air/steam is lighter → expand less in pressure → rises more
+      const thEx = _mThEx[mt];
+      if (thEx > 0) {
+        const tempRatio = K.AMBIENT / Math.max(200, T);
+        _effMs[p] = _mMass[mt] * tempRatio;
+      } else {
+        _effMs[p] = _mMass[mt];
+      }
+    }
+
+    /* ── RESET GRID ──────────────────────────────────────────── */
+    gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0); gH.fill(0);
+
+    /* ── P2G ─────────────────────────────────────────────────── */
+    for (let p=0; p<nP; p++) {
+      const mt=pMt[p], type=_mType[mt];
+      const pm=_effMs[p], fo=p*9, T=pT[p];
+
+      const C0=pC[fo],   C1=pC[fo+1],C2=pC[fo+2];
+      const C3=pC[fo+3], C4=pC[fo+4],C5=pC[fo+5];
+      const C6=pC[fo+6], C7=pC[fo+7],C8=pC[fo+8];
+      let A0,A1,A2,A3,A4,A5,A6,A7,A8;
+
+      if (type===2) { /* elastic */
+        const f0=pF[fo],f1=pF[fo+1],f2=pF[fo+2];
+        const f3=pF[fo+3],f4=pF[fo+4],f5=pF[fo+5];
+        const f6=pF[fo+6],f7=pF[fo+7],f8=pF[fo+8];
+        const J=f0*(f4*f8-f5*f7)-f1*(f3*f8-f5*f6)+f2*(f3*f7-f4*f6);
+        polarR(pF,fo);
+        const m0=f0-_R[0],m1=f1-_R[1],m2=f2-_R[2];
+        const m3=f3-_R[3],m4=f4-_R[4],m5=f5-_R[5];
+        const m6=f6-_R[6],m7=f7-_R[7],m8=f8-_R[8];
+        const p0=m0*f0+m1*f3+m2*f6, p1=m0*f1+m1*f4+m2*f7, p2=m0*f2+m1*f5+m2*f8;
+        const p3=m3*f0+m4*f3+m5*f6, p4=m3*f1+m4*f4+m5*f7, p5=m3*f2+m4*f5+m5*f8;
+        const p6=m6*f0+m7*f3+m8*f6, p7=m6*f1+m7*f4+m8*f7, p8=m6*f2+m7*f5+m8*f8;
+        const mu2=2*_mMu[mt], lj=_mLa[mt]*J*(J-1);
+        A0=coef*(mu2*p0+lj)+pm*C0; A1=coef*mu2*p1+pm*C1; A2=coef*mu2*p2+pm*C2;
+        A3=coef*mu2*p3+pm*C3;      A4=coef*(mu2*p4+lj)+pm*C4; A5=coef*mu2*p5+pm*C5;
+        A6=coef*mu2*p6+pm*C6;      A7=coef*mu2*p7+pm*C7; A8=coef*(mu2*p8+lj)+pm*C8;
+      } else { /* fluid / granular */
+        const J=pJ[p];
+        let press = _effE[p] * (J-1);
+        if (press>0) press=0;
+        const s=coef*press;
+        A0=s+pm*C0; A1=pm*C1;  A2=pm*C2;
+        A3=pm*C3;   A4=s+pm*C4;A5=pm*C5;
+        A6=pm*C6;   A7=pm*C7;  A8=s+pm*C8;
       }
 
-      const xp = px[p], yp = py[p], zp = pz[p];
-      const bx = (xp * INV - 0.5) | 0;
-      const by = (yp * INV - 0.5) | 0;
-      const bz = (zp * INV - 0.5) | 0;
-      const fx = xp * INV - bx, fy = yp * INV - by, fz = zp * INV - bz;
+      const xp=px[p],yp=py[p],zp=pz[p];
+      const bx=(xp*INV-.5)|0, by=(yp*INV-.5)|0, bz=(zp*INV-.5)|0;
+      const fx=xp*INV-bx, fy=yp*INV-by, fz=zp*INV-bz;
+      _WX[0]=.5*(1.5-fx)**2; _WX[1]=.75-(fx-1)**2; _WX[2]=.5*(fx-.5)**2;
+      _WY[0]=.5*(1.5-fy)**2; _WY[1]=.75-(fy-1)**2; _WY[2]=.5*(fy-.5)**2;
+      _WZ[0]=.5*(1.5-fz)**2; _WZ[1]=.75-(fz-1)**2; _WZ[2]=.5*(fz-.5)**2;
 
-      _WX[0]=0.5*(1.5-fx)*(1.5-fx); _WX[1]=0.75-(fx-1)*(fx-1); _WX[2]=0.5*(fx-0.5)*(fx-0.5);
-      _WY[0]=0.5*(1.5-fy)*(1.5-fy); _WY[1]=0.75-(fy-1)*(fy-1); _WY[2]=0.5*(fy-0.5)*(fy-0.5);
-      _WZ[0]=0.5*(1.5-fz)*(1.5-fz); _WZ[1]=0.75-(fz-1)*(fz-1); _WZ[2]=0.5*(fz-0.5)*(fz-0.5);
+      const vx=pvx[p],vy=pvy[p],vz=pvz[p];
+      const mvx=pm*vx,mvy=pm*vy,mvz=pm*vz;
 
-      const vx = pvx[p], vy = pvy[p], vz = pvz[p];
-      const mvx = pm*vx, mvy = pm*vy, mvz = pm*vz;
-
-      for (let i = 0; i < 3; i++) {
-        const gi = bx + i; if (gi < 0 || gi >= N) continue;
-        const dpx = (i - fx) * DX;
-        for (let j = 0; j < 3; j++) {
-          const gj = by + j; if (gj < 0 || gj >= N) continue;
-          const dpy = (j - fy) * DX;
-          const wij = _WX[i] * _WY[j];
-          for (let k = 0; k < 3; k++) {
-            const gk = bz + k; if (gk < 0 || gk >= N) continue;
-            const dpz = (k - fz) * DX;
-            const w   = wij * _WZ[k];
-            const idx = (gi * N + gj) * N + gk;
-
-            gM[idx]  += w * pm;
-            gVx[idx] += w * (mvx + A0*dpx + A1*dpy + A2*dpz);
-            gVy[idx] += w * (mvy + A3*dpx + A4*dpy + A5*dpz);
-            gVz[idx] += w * (mvz + A6*dpx + A7*dpy + A8*dpz);
+      for (let i=0;i<3;i++) {
+        const gi=bx+i; if (gi<0||gi>=N) continue;
+        const dpx=(i-fx)*DX;
+        for (let j=0;j<3;j++) {
+          const gj=by+j; if (gj<0||gj>=N) continue;
+          const dpy=(j-fy)*DX, wij=_WX[i]*_WY[j];
+          for (let k=0;k<3;k++) {
+            const gk=bz+k; if (gk<0||gk>=N) continue;
+            const dpz=(k-fz)*DX, w=wij*_WZ[k];
+            const idx=(gi*N+gj)*N+gk;
+            gM[idx]  += w*pm;
+            gVx[idx] += w*(mvx+A0*dpx+A1*dpy+A2*dpz);
+            gVy[idx] += w*(mvy+A3*dpx+A4*dpy+A5*dpz);
+            gVz[idx] += w*(mvz+A6*dpx+A7*dpy+A8*dpz);
+            gH[idx]  += w*pm*T;   // scatter heat
           }
         }
       }
     }
 
-    /* ── GRID UPDATE (momentum → velocity, gravity, boundaries) ─── */
-    const g = this.gravity;
-    for (let idx = 0; idx < this.N3; idx++) {
-      const mass = gM[idx];
-      if (mass < 1e-12) continue;
-      const im = 1.0 / mass;
-
-      // decode cell coords (idx = (i*N + j)*N + k)
-      const k = idx % N;
-      const j = ((idx / N) | 0) % N;
-      const i = (idx / (N * N)) | 0;
-
-      let vx = gVx[idx] * im;
-      let vy = gVy[idx] * im + DT * g;
-      let vz = gVz[idx] * im;
-
-      // walls: zero the inward normal component
-      if (i < 2   && vx < 0) vx = 0;
-      if (i > N-3 && vx > 0) vx = 0;
-      if (j < 2   && vy < 0) vy = 0;
-      if (j > N-3 && vy > 0) vy = 0;
-      if (k < 2   && vz < 0) vz = 0;
-      if (k > N-3 && vz > 0) vz = 0;
-
-      // floor friction so granular material can build slopes / piles
-      if (j < 2) { vx *= 0.90; vz *= 0.90; }
-
-      gVx[idx] = vx; gVy[idx] = vy; gVz[idx] = vz;
+    /* ── GRID UPDATE ─────────────────────────────────────────── */
+    const g=this.gravity;
+    for (let idx=0; idx<this.N3; idx++) {
+      const mass=gM[idx]; if (mass<1e-12) continue;
+      const im=1/mass;
+      const k=idx%N, j=((idx/N)|0)%N, i=(idx/(N*N))|0;
+      let vx=gVx[idx]*im, vy=gVy[idx]*im+DT*g, vz=gVz[idx]*im;
+      if (i<2   && vx<0) vx=0; if (i>N-3 && vx>0) vx=0;
+      if (j<2   && vy<0) vy=0; if (j>N-3 && vy>0) vy=0;
+      if (k<2   && vz<0) vz=0; if (k>N-3 && vz>0) vz=0;
+      if (j<2)  { vx*=.90; vz*=.90; }  // floor friction
+      gVx[idx]=vx; gVy[idx]=vy; gVz[idx]=vz;
+      gTV[idx] = gH[idx]*im;  // normalise heat → grid temperature
     }
 
-    /* ── G2P (grid → particle) + constitutive update + advect ─── */
-    const lo = 1.5 * DX, hi = (N - 1.5) * DX;
+    /* ── G2P + heat gather + deformation update ─────────────── */
+    const lo=1.5*DX, hi=(N-1.5)*DX;
 
-    for (let p = 0; p < nP; p++) {
-      const mt  = pMt[p];
-      const type = _mType[mt];
-      const fo  = p * 9;
+    for (let p=0; p<nP; p++) {
+      const mt=pMt[p], type=_mType[mt], fo=p*9;
+      const xp=px[p],yp=py[p],zp=pz[p];
+      const bx=(xp*INV-.5)|0, by=(yp*INV-.5)|0, bz=(zp*INV-.5)|0;
+      const fx=xp*INV-bx, fy=yp*INV-by, fz=zp*INV-bz;
+      _WX[0]=.5*(1.5-fx)**2; _WX[1]=.75-(fx-1)**2; _WX[2]=.5*(fx-.5)**2;
+      _WY[0]=.5*(1.5-fy)**2; _WY[1]=.75-(fy-1)**2; _WY[2]=.5*(fy-.5)**2;
+      _WZ[0]=.5*(1.5-fz)**2; _WZ[1]=.75-(fz-1)**2; _WZ[2]=.5*(fz-.5)**2;
 
-      const xp = px[p], yp = py[p], zp = pz[p];
-      const bx = (xp * INV - 0.5) | 0;
-      const by = (yp * INV - 0.5) | 0;
-      const bz = (zp * INV - 0.5) | 0;
-      const fx = xp * INV - bx, fy = yp * INV - by, fz = zp * INV - bz;
-
-      _WX[0]=0.5*(1.5-fx)*(1.5-fx); _WX[1]=0.75-(fx-1)*(fx-1); _WX[2]=0.5*(fx-0.5)*(fx-0.5);
-      _WY[0]=0.5*(1.5-fy)*(1.5-fy); _WY[1]=0.75-(fy-1)*(fy-1); _WY[2]=0.5*(fy-0.5)*(fy-0.5);
-      _WZ[0]=0.5*(1.5-fz)*(1.5-fz); _WZ[1]=0.75-(fz-1)*(fz-1); _WZ[2]=0.5*(fz-0.5)*(fz-0.5);
-
-      let nvx=0, nvy=0, nvz=0;
+      let nvx=0,nvy=0,nvz=0;
       let C0=0,C1=0,C2=0,C3=0,C4=0,C5=0,C6=0,C7=0,C8=0;
+      let gridT=0, gridW=0;
 
-      for (let i = 0; i < 3; i++) {
-        const gi = bx + i; if (gi < 0 || gi >= N) continue;
-        const dpx = (i - fx) * DX;
-        for (let j = 0; j < 3; j++) {
-          const gj = by + j; if (gj < 0 || gj >= N) continue;
-          const dpy = (j - fy) * DX;
-          const wij = _WX[i] * _WY[j];
-          for (let k = 0; k < 3; k++) {
-            const gk = bz + k; if (gk < 0 || gk >= N) continue;
-            const dpz = (k - fz) * DX;
-            const w   = wij * _WZ[k];
-            const idx = (gi * N + gj) * N + gk;
-            const gvx = gVx[idx], gvy = gVy[idx], gvz = gVz[idx];
-
-            nvx += w*gvx; nvy += w*gvy; nvz += w*gvz;
-            const sc = w * DINV;          // C += D⁻¹ · w · v ⊗ dpos
-            C0 += sc*gvx*dpx; C1 += sc*gvx*dpy; C2 += sc*gvx*dpz;
-            C3 += sc*gvy*dpx; C4 += sc*gvy*dpy; C5 += sc*gvy*dpz;
-            C6 += sc*gvz*dpx; C7 += sc*gvz*dpy; C8 += sc*gvz*dpz;
+      for (let i=0;i<3;i++) {
+        const gi=bx+i; if (gi<0||gi>=N) continue;
+        const dpx=(i-fx)*DX;
+        for (let j=0;j<3;j++) {
+          const gj=by+j; if (gj<0||gj>=N) continue;
+          const dpy=(j-fy)*DX, wij=_WX[i]*_WY[j];
+          for (let k=0;k<3;k++) {
+            const gk=bz+k; if (gk<0||gk>=N) continue;
+            const dpz=(k-fz)*DX, w=wij*_WZ[k];
+            const idx=(gi*N+gj)*N+gk;
+            const gvx=gVx[idx],gvy=gVy[idx],gvz=gVz[idx];
+            nvx+=w*gvx; nvy+=w*gvy; nvz+=w*gvz;
+            const sc=w*DINV;
+            C0+=sc*gvx*dpx;C1+=sc*gvx*dpy;C2+=sc*gvx*dpz;
+            C3+=sc*gvy*dpx;C4+=sc*gvy*dpy;C5+=sc*gvy*dpz;
+            C6+=sc*gvz*dpx;C7+=sc*gvz*dpy;C8+=sc*gvz*dpz;
+            // temperature gather (only from non-zero cells)
+            if (gM[idx]>1e-12) { gridT+=w*gTV[idx]; gridW+=w; }
           }
         }
       }
 
-      /* velocity (PIC) with a gentle per-material stabiliser */
-      const vd = _mVd[mt];
-      pvx[p] = nvx * vd; pvy[p] = nvy * vd; pvz[p] = nvz * vd;
+      pvx[p]=nvx*_mVd[mt]; pvy[p]=nvy*_mVd[mt]; pvz[p]=nvz*_mVd[mt];
 
-      /* viscosity / internal friction: scale the affine matrix.
-         (Reducing C, NOT linear velocity, so materials still fall at g.) */
-      const cs = _mCs[mt];
+      const cs=_effCs[p];
       C0*=cs;C1*=cs;C2*=cs;C3*=cs;C4*=cs;C5*=cs;C6*=cs;C7*=cs;C8*=cs;
       pC[fo]=C0;pC[fo+1]=C1;pC[fo+2]=C2;
       pC[fo+3]=C3;pC[fo+4]=C4;pC[fo+5]=C5;
       pC[fo+6]=C6;pC[fo+7]=C7;pC[fo+8]=C8;
 
-      /* ── deformation update ── */
-      if (type === 2) { /* elastic */
-        // F ← (I + dt·C) · F
-        const a0=1+DT*C0, a1=DT*C1,   a2=DT*C2;
-        const a3=DT*C3,   a4=1+DT*C4, a5=DT*C5;
-        const a6=DT*C6,   a7=DT*C7,   a8=1+DT*C8;
-        const f0=pF[fo],   f1=pF[fo+1], f2=pF[fo+2],
-              f3=pF[fo+3],  f4=pF[fo+4], f5=pF[fo+5],
-              f6=pF[fo+6],  f7=pF[fo+7], f8=pF[fo+8];
-        pF[fo]   = a0*f0+a1*f3+a2*f6; pF[fo+1] = a0*f1+a1*f4+a2*f7; pF[fo+2] = a0*f2+a1*f5+a2*f8;
-        pF[fo+3] = a3*f0+a4*f3+a5*f6; pF[fo+4] = a3*f1+a4*f4+a5*f7; pF[fo+5] = a3*f2+a4*f5+a5*f8;
-        pF[fo+6] = a6*f0+a7*f3+a8*f6; pF[fo+7] = a6*f1+a7*f4+a8*f7; pF[fo+8] = a6*f2+a7*f5+a8*f8;
+      /* Thermal diffusion: particle T moves toward grid average */
+      if (gridW > 0.01) {
+        const avgT = gridT / gridW;
+        const cond = _mCond[mt];
+        pT[p] += cond * (avgT - pT[p]);
+      }
+      /* Slow radiative cooling toward ambient (~0.3°C / s) */
+      pT[p] += 0.00008 * (K.AMBIENT - pT[p]);
+
+      /* Deformation gradient update */
+      if (type===2) {
+        const a0=1+DT*C0,a1=DT*C1,a2=DT*C2;
+        const a3=DT*C3,a4=1+DT*C4,a5=DT*C5;
+        const a6=DT*C6,a7=DT*C7,a8=1+DT*C8;
+        const f0=pF[fo],f1=pF[fo+1],f2=pF[fo+2];
+        const f3=pF[fo+3],f4=pF[fo+4],f5=pF[fo+5];
+        const f6=pF[fo+6],f7=pF[fo+7],f8=pF[fo+8];
+        pF[fo]  =a0*f0+a1*f3+a2*f6; pF[fo+1]=a0*f1+a1*f4+a2*f7; pF[fo+2]=a0*f2+a1*f5+a2*f8;
+        pF[fo+3]=a3*f0+a4*f3+a5*f6; pF[fo+4]=a3*f1+a4*f4+a5*f7; pF[fo+5]=a3*f2+a4*f5+a5*f8;
+        pF[fo+6]=a6*f0+a7*f3+a8*f6; pF[fo+7]=a6*f1+a7*f4+a8*f7; pF[fo+8]=a6*f2+a7*f5+a8*f8;
       } else {
-        // J ← J·(1 + dt·tr(C))
-        let J = pJ[p] * (1.0 + DT * (C0 + C4 + C8));
-        if (type === 1 && J > 1.0) J = 1.0;  // granular: no stored expansion
-        pJ[p] = J < 0.6 ? 0.6 : J > 1.5 ? 1.5 : J;
+        let J=pJ[p]*(1+DT*(C0+C4+C8));
+        if (type===1 && J>1) J=1;
+        pJ[p]=J<0.6?0.6:J>1.5?1.5:J;
       }
 
-      /* advect */
-      let npx = xp + DT*nvx, npy = yp + DT*nvy, npz = zp + DT*nvz;
-      px[p] = npx < lo ? lo : npx > hi ? hi : npx;
-      py[p] = npy < lo ? lo : npy > hi ? hi : npy;
-      pz[p] = npz < lo ? lo : npz > hi ? hi : npz;
+      /* Advect */
+      let npx=xp+DT*nvx, npy=yp+DT*nvy, npz=zp+DT*nvz;
+      px[p]=npx<lo?lo:npx>hi?hi:npx;
+      py[p]=npy<lo?lo:npy>hi?hi:npy;
+      pz[p]=npz<lo?lo:npz>hi?hi:npz;
+    }
+
+    /* ── Phase transitions ───────────────────────────────────── */
+    this._applyPhaseTransitions();
+  }
+
+  _applyPhaseTransitions() {
+    const { pMt, pT, pJ, pF, nP } = this;
+    for (let p=0; p<nP; p++) {
+      const mt = pMt[p];
+      const T  = pT[p];
+      const m  = MATERIALS[mt];
+
+      let newMt = -1;
+      if (m.T_vaporize !== undefined && T >= m.T_vaporize) {
+        newMt = m.vaporizeTo;
+      } else if (m.T_solidify !== undefined && T <= m.T_solidify) {
+        newMt = m.solidifyTo;
+      }
+
+      if (newMt >= 0 && newMt !== mt) {
+        pMt[p] = newMt;
+        // Carry over temperature; let the new material's cond pull it into range
+        // Reset deformation state
+        pJ[p] = 1.0;
+        const fo = p*9;
+        pF[fo]=1;pF[fo+1]=0;pF[fo+2]=0;
+        pF[fo+3]=0;pF[fo+4]=1;pF[fo+5]=0;
+        pF[fo+6]=0;pF[fo+7]=0;pF[fo+8]=1;
+        // Update flat arrays for the changed particle
+        this._effE[p]  = this._mE[newMt];
+        this._effCs[p] = this._mCs[newMt];
+        this._effMs[p] = this._mMass[newMt];
+      }
+    }
+  }
+
+  /* ── Heat injection (external API) ─────────────────────────── */
+  /** Add heat to all particles within radius of world point (x,y,z). */
+  addHeat(wx, wy, wz, radius, deltaT) {
+    const r2 = radius*radius;
+    for (let p=0; p<this.nP; p++) {
+      const dx=this.px[p]-wx, dy=this.py[p]-wy, dz=this.pz[p]-wz;
+      if (dx*dx+dy*dy+dz*dz < r2) this.pT[p] += deltaT;
     }
   }
 }

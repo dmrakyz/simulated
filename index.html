@@ -8,8 +8,6 @@
 <meta name="theme-color" content="#060810">
 <title>FluidCreature</title>
 
-<!-- Import map: bare specifiers → CDN URLs.
-     Must appear before any module script. -->
 <script type="importmap">
 {
   "imports": {
@@ -24,13 +22,11 @@
 </head>
 <body>
 
-<!-- ══ Loading Screen ══════════════════════════════════════════ -->
+<!-- ══ Loading ══════════════════════════════════════════════════ -->
 <div id="ld">
   <div id="ld-inner">
     <div class="spin"></div>
     <h2>FLUIDCREATURE</h2>
-
-    <!-- Step-by-step load log -->
     <div id="ld-steps">
       <div class="ld-step done">
         <span class="ld-icon">✓</span>
@@ -40,7 +36,7 @@
   </div>
 </div>
 
-<!-- ══ Error / Console Panel (always in DOM) ═══════════════════ -->
+<!-- ══ Error panel ══════════════════════════════════════════════ -->
 <div id="err-panel">
   <div id="err-header">
     <span id="err-title">⚠ Console</span>
@@ -53,7 +49,7 @@
   <div id="err-list"></div>
 </div>
 
-<!-- ══ Main App ════════════════════════════════════════════════ -->
+<!-- ══ App ══════════════════════════════════════════════════════ -->
 <div id="app">
 
   <!-- Toolbar -->
@@ -63,67 +59,80 @@
     <button class="mbtn"    data-mode="build">BUILD</button>
     <button class="mbtn"    data-mode="simulate">SIMULATE</button>
     <div class="sp"></div>
-    <!-- Console panel toggle; turns red when errors exist -->
-    <button class="ibtn" id="err-open-btn" data-has-error="false" title="Console / Errors">⚑</button>
-    <button class="ibtn" id="btn-rp"       title="Properties">⚙</button>
+    <button class="ibtn" id="err-open-btn" data-has-error="false" title="Console">⚑</button>
+    <button class="ibtn" id="btn-rp" title="Properties">⚙</button>
   </div>
 
   <!-- Canvas viewport -->
   <div id="cv">
     <canvas id="c"></canvas>
 
-    <!-- HUD overlay -->
+    <!-- HUD -->
     <div id="hud">
       FPS: <span id="hfps">--</span><br>
       Particles: <span id="hpc">0</span><br>
-      Material: <span id="hmat">Water</span>
+      Material: <span id="hmat">Water</span><br>
+      Avg T: <span id="htemp">--</span>
     </div>
 
-    <!-- FAB buttons -->
+    <!-- FABs -->
     <button class="fab" id="fab-panel">☰</button>
     <button class="fab" id="fab-spawn">＋ Spawn</button>
 
-    <!-- Transient hint -->
-    <div id="hint">Tap the world to pour · long-press to open palette</div>
+    <div id="hint">Tap to pour · H+tap = heat · Shift+H+tap = cool</div>
   </div>
 
-  <!-- Left panel: materials + spawn size -->
+  <!-- ══ Left panel ══════════════════════════════════════════ -->
   <div id="lp">
-    <div class="ptitle">Materials</div>
 
-    <button class="mfbtn on" data-m="0">
-      <div class="sw" style="background:#2288ff"></div>Water
-    </button>
-    <button class="mfbtn" data-m="1">
-      <div class="sw" style="background:#ddbb55"></div>Sand
-    </button>
-    <button class="mfbtn" data-m="2">
-      <div class="sw" style="background:#ff5500"></div>Lava
-    </button>
-    <button class="mfbtn" data-m="3">
-      <div class="sw" style="background:#ddeeff"></div>Snow
-    </button>
-    <button class="mfbtn" data-m="4">
-      <div class="sw" style="background:#ffbb22"></div>Honey
-    </button>
-    <button class="mfbtn" data-m="5">
-      <div class="sw" style="background:#7a5c3a"></div>Mud
-    </button>
-    <button class="mfbtn" data-m="6">
-      <div class="sw" style="background:#334422"></div>Oil
-    </button>
-    <button class="mfbtn" data-m="7">
-      <div class="sw" style="background:#aaddff"></div>Ice
-    </button>
+    <!-- WORLD mode -->
+    <div id="world-panel">
+      <div class="ptitle">Materials</div>
+      <button class="mfbtn on" data-m="0"><div class="sw" style="background:#2299ff"></div>Water</button>
+      <button class="mfbtn"    data-m="1"><div class="sw" style="background:#d9b25f"></div>Sand</button>
+      <button class="mfbtn"    data-m="2"><div class="sw" style="background:#ff5522"></div>Lava</button>
+      <button class="mfbtn"    data-m="3"><div class="sw" style="background:#eef3ff"></div>Snow</button>
+      <button class="mfbtn"    data-m="4"><div class="sw" style="background:#ffb022"></div>Honey</button>
+      <button class="mfbtn"    data-m="5"><div class="sw" style="background:#7a5a38"></div>Mud</button>
+      <button class="mfbtn"    data-m="6"><div class="sw" style="background:#3c3a22"></div>Oil</button>
+      <button class="mfbtn"    data-m="7"><div class="sw" style="background:#aadcff"></div>Ice</button>
+      <button class="mfbtn"    data-m="8"><div class="sw" style="background:#88aacc;opacity:.5"></div>Air</button>
+      <button class="mfbtn"    data-m="9"><div class="sw" style="background:#ddeeff;opacity:.5"></div>Steam</button>
 
-    <div class="ptitle" style="margin-top:16px">Spawn Size</div>
-    <input type="range" id="spawn-size" min="0.5" max="4" step="0.25" value="1.5">
-    <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px">
-      Size: <span id="size-label">1.5</span> m
+      <div class="ptitle" style="margin-top:14px">Spawn Size</div>
+      <input type="range" id="spawn-size" min="0.5" max="4" step="0.25" value="1.5">
+      <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px">
+        Size: <span id="size-label">1.5</span> m
+      </div>
+
+      <div class="ptitle" style="margin-top:14px">Heat Brush</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.4);line-height:1.65">
+        <kbd style="background:rgba(255,255,255,.1);padding:1px 4px;border-radius:3px">H</kbd> + tap → add heat<br>
+        <kbd style="background:rgba(255,255,255,.1);padding:1px 4px;border-radius:3px">Shift+H</kbd> + tap → cool<br>
+        Also: Properties panel
+      </div>
+
+      <div class="ptitle" style="margin-top:14px">Phase Transitions</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.4);line-height:1.7">
+        Water + cold → Ice<br>
+        Ice + heat → Water<br>
+        Water + heat → Steam<br>
+        Steam + cool → Water<br>
+        Lava + cool → Sand<br>
+        Oil + heat → Steam<br>
+        Snow + heat → Water<br>
+        Mud + heat → Sand
+      </div>
     </div>
+
+    <!-- BUILD mode: populated by CreatureBuilder.buildPartPanelHTML() -->
+    <div id="build-panel" style="display:none">
+      <div id="build-panel-inner"></div>
+    </div>
+
   </div>
 
-  <!-- Right panel: properties GUI mount -->
+  <!-- Right panel -->
   <div id="rp">
     <div class="ptitle">Simulation</div>
     <div id="gui-root"></div>
@@ -131,14 +140,14 @@
 
 </div><!-- #app -->
 
-<!-- ══ Scripts ══════════════════════════════════════════════════
-     error-panel.js: regular script (not module) — runs immediately,
-     sets up window.ErrPanel and global error interceptors BEFORE
-     any module code runs.                                        -->
 <script src="js/error-panel.js"></script>
-
-<!-- Main entry point (ES module, deferred by default) -->
 <script type="module" src="js/main.js"></script>
+<script type="module">
+  /* Inject creature-builder part buttons into the build panel. */
+  import { CreatureBuilder } from './js/creature/builder.js';
+  document.getElementById('build-panel-inner').innerHTML =
+    CreatureBuilder.buildPartPanelHTML();
+</script>
 
 </body>
 </html>
