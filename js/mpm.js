@@ -46,9 +46,12 @@ export const MATERIALS = [
   { name:'Mud',   col:0x7a5a38, rho:1800, E:4.0e5, type:'granular', cScale:0.28, vdamp:0.996 },
   // id 6: Oil — light, mildly viscous fluid
   { name:'Oil',   col:0x3c3a22, rho:900,  E:6.0e5, type:'fluid',    cScale:0.80, vdamp:0.997 },
-  // id 7: Ice — stiff elastic, holds its shape and bounces
-  // (E capped at 8e5 so the elastic wave speed stays CFL-stable at 5 substeps)
-  { name:'Ice',   col:0xaadcff, rho:917,  E:8.0e5, nu:0.32, type:'elastic', cScale:1.00, vdamp:1.000 },
+  // id 7: Ice — stiff elastic, holds its shape and bounces.
+  // (E capped at 8e5 so the elastic wave speed stays CFL-stable at 5 substeps.)
+  // rho is set below water (real ice ≈917, only ~8% buoyant) so it clearly
+  // bobs at the surface instead of drifting half-submerged and getting buried
+  // when a lot of water is poured on top of it.
+  { name:'Ice',   col:0xaadcff, rho:780,  E:8.0e5, nu:0.32, type:'elastic', cScale:1.00, vdamp:1.000 },
   // id 8: Air — very light gas. rho is boosted to 40 (real ≈1.2) so the
   // air/water mass ratio stays CFL-stable; buoyancy is applied explicitly in
   // G2P (see "Archimedes" block) so air bubbles rise through denser fluids.
@@ -390,25 +393,32 @@ export class MPM {
          velocity couples them: a PIC re-gather every substep would reset any
          buoyant impulse back to the (near-static) water velocity, and the air
          would never climb. So instead of adding a force, we assert a target
-         rise velocity whenever the parcel is submerged.
-         "Submerged" = a much heavier fluid exists in the grid column overhead.
-         We scan up to ~24 cells (6 m) up; grid mass per cell is ≈ 8·PVOL·rho
-         (weights partition unity, ~8 particles/cell). The rise speed grows with
-         the density contrast and is capped to a gentle terminal velocity. At the
-         surface nothing heavy is above, so the parcel stops and simply floats. */
+         rise velocity whenever the parcel is genuinely SUBMERGED.
+
+         "Submerged" means heavier fluid is sitting *directly on top of* the
+         parcel — within a short reach (≤ 4 cells / 1 m), NOT anywhere far
+         overhead. The previous 24-cell (6 m) reach made air "magically" climb
+         toward any unrelated blob dropped high above it across open space. A
+         short window keeps buoyancy local: air bubbles up through fluid that is
+         actually resting on it and simply stops at a free surface. */
       if (type === 0 && _mRho[mt] < 100) {
+        // Air is the ambient medium: cancel its weight so a box of air stays
+        // suspended ("fills" the volume) instead of raining down to the floor.
+        // (The grid added DT·g to every cell this substep; undo it for air.)
+        nvy += absG * DT;
         const ax = bx + 1, az = bz + 1;
         if (ax >= 0 && ax < N && az >= 0 && az < N) {
           const colBase = (ax*N) * N + az;
-          const yTop = Math.min(N - 1, by + 2 + 24);
+          const yTop  = Math.min(N - 1, by + 2 + 4);   // reach ≤ 4 cells (1 m) up
+          const airR  = _mRho[mt];
           let heavy = 0;
           for (let yy = by + 2; yy <= yTop; yy++) {
             const r = gM[colBase + yy*N] / (8 * PVOL);
             if (r > heavy) heavy = r;
           }
-          if (heavy > _mRho[mt] * 2) {
-            const rise = Math.min((heavy / _mRho[mt] - 1) * 0.12, 3.0);
-            if (nvy < rise) nvy = rise;   // assert terminal rise velocity
+          if (heavy > airR * 1.5) {       // a heavier fluid is resting on us
+            const rise = Math.min((heavy / airR - 1) * 0.10, 2.5);
+            if (nvy < rise) nvy = rise;   // assert a gentle terminal rise velocity
           }
         }
       }
