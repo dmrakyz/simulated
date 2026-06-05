@@ -290,16 +290,16 @@ function buildGUI(GUI, simP, sim, domHelper) {
     water() { spawnRandom(sim, 0); },
     sand()  { spawnRandom(sim, 1); },
     lava()  { spawnRandom(sim, 2); },
-    air()   { spawnRandom(sim, 8); },
-    fillAir() { fillAir(sim); },
+    honey() { spawnRandom(sim, 4); },
+    oil()   { spawnRandom(sim, 6); },
   };
   gui.add(actions, 'reset').name('⟳ Reset');
   const folder = gui.addFolder('Spawn material');
   folder.add(actions, 'water').name('+ Water');
   folder.add(actions, 'sand').name('+ Sand');
   folder.add(actions, 'lava').name('+ Lava');
-  folder.add(actions, 'air').name('+ Air');
-  folder.add(actions, 'fillAir').name('☁ Fill box w/ air');
+  folder.add(actions, 'honey').name('+ Honey');
+  folder.add(actions, 'oil').name('+ Oil');
 }
 
 function spawnRandom(sim, matId) {
@@ -308,15 +308,6 @@ function spawnRandom(sim, matId) {
   const cz = hs + Math.random() * (d - hs*2);
   const top = d * 0.55;
   sim.spawnBox(cx-hs, top - hs*2, cz-hs, cx+hs, top, cz+hs, matId);
-}
-
-/* Fill most of the domain with a SPARSE air field (ppc < 1 → ~1 particle every
-   couple of cells) so the box reads as "full of air" for a few thousand
-   particles instead of hundreds of thousands. Buoyancy keys off the heavy fluid
-   resting on the air, not the air's own density, so a coarse fill works fine. */
-function fillAir(sim) {
-  const d  = sim.DOMAIN, m = 0.6;
-  sim.spawnBox(m, m, m, d - m, d * 0.9, d - m, 8, 0.5);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -416,9 +407,6 @@ function wireUI(THREE, sim, cam, tapMesh, builder) {
 
   /* ── FAB spawn ─────────────────────────────────────────────── */
   document.getElementById('fab-spawn')?.addEventListener('click', () => spawnRandom(sim, activeMat));
-
-  /* ── Fill box with air ─────────────────────────────────────── */
-  document.getElementById('btn-fill-air')?.addEventListener('click', () => fillAir(sim));
 
   /* ── Tap-to-pour (WORLD mode only; builder owns clicks in BUILD) ── */
   const ray = new THREE.Raycaster(), rv2 = new THREE.Vector2();

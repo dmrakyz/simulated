@@ -118,9 +118,6 @@
       <button class="mfbtn" data-m="7">
         <div class="sw" style="background:#aaddff"></div>Ice
       </button>
-      <button class="mfbtn" data-m="8">
-        <div class="sw" style="background:#88aacc;opacity:.6"></div>Air
-      </button>
 
       <div class="ptitle" style="margin-top:16px">Spawn Size</div>
       <input type="range" id="spawn-size" min="0.5" max="4" step="0.25" value="1.5">
@@ -128,20 +125,13 @@
         Size: <span id="size-label">1.5</span> m
       </div>
 
-      <div class="ptitle" style="margin-top:16px">Air</div>
-      <button class="mfbtn" id="btn-fill-air" style="justify-content:center">
-        ☁ Fill box with air
-      </button>
-      <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px">
-        Sparse air fill — pour a heavier material in and watch it sink while air bubbles up.
-      </div>
-
-      <div class="ptitle" style="margin-top:14px">Tips</div>
+      <div class="ptitle" style="margin-top:14px">Physics</div>
       <div style="font-size:10px;color:rgba(255,255,255,.4);line-height:1.7">
-        Air bubbles rise through water<br>
-        Lava sinks through water<br>
-        Oil floats above mud<br>
-        Snow & ice hold their shape
+        Air is the background — objects feel drag when airborne<br>
+        Lava sinks through water · water floats on lava<br>
+        Oil floats on water · honey is slow and thick<br>
+        Snow &amp; ice hold shape and bounce<br>
+        Ice floats — drop it in water to see
       </div>
     </div>
 

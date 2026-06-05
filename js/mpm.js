@@ -227,7 +227,6 @@ export class MPM {
             gM, gVx, gVy, gVz, _WX, _WY, _WZ,
             _mType, _mMass, _mE, _mMu, _mLa, _mCs, _mVd, _mRho } = this;
     const coef = -DT * PVOL * DINV;
-    const absG = Math.abs(this.gravity);
 
     /* ── RESET GRID ────────────────────────────────────────── */
     gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0);
@@ -388,37 +387,45 @@ export class MPM {
         }
       }
 
-      /* Buoyant rise for very light fluids (air, rho≈40).
-         Air and a surrounding heavy fluid share grid cells, so the single grid
-         velocity couples them: a PIC re-gather every substep would reset any
-         buoyant impulse back to the (near-static) water velocity, and the air
-         would never climb. So instead of adding a force, we assert a target
-         rise velocity whenever the parcel is genuinely SUBMERGED.
+      /* Implicit effects: air drag + general buoyancy ───────────────────────
+         Air is the implicit background — no particles, no visible spheres.
 
-         "Submerged" means heavier fluid is sitting *directly on top of* the
-         parcel — within a short reach (≤ 4 cells / 1 m), NOT anywhere far
-         overhead. The previous 24-cell (6 m) reach made air "magically" climb
-         toward any unrelated blob dropped high above it across open space. A
-         short window keeps buoyancy local: air bubbles up through fluid that is
-         actually resting on it and simply stops at a free surface. */
-      if (type === 0 && _mRho[mt] < 100) {
-        // Air is the ambient medium: cancel its weight so a box of air stays
-        // suspended ("fills" the volume) instead of raining down to the floor.
-        // (The grid added DT·g to every cell this substep; undo it for air.)
-        nvy += absG * DT;
+         Air drag: any particle type flying through a sparse region (low grid
+         mass) decelerates — this is the drag from moving through air. Particles
+         resting in a dense pool don't feel it; airborne splashes and projectiles
+         do. This enables realistic drag/lift for wings and tails in future.
+
+         General buoyancy: any fluid lighter than the material directly above it
+         rises (Archimedes). The original code only applied this to air (rho<100);
+         now water floats up through lava, oil through water, etc. We scan a short
+         column (4 cells / 1 m) so buoyancy is LOCAL — a particle only rises when
+         a denser material is physically resting on it. */
+      {
         const ax = bx + 1, az = bz + 1;
         if (ax >= 0 && ax < N && az >= 0 && az < N) {
-          const colBase = (ax*N) * N + az;
-          const yTop  = Math.min(N - 1, by + 2 + 4);   // reach ≤ 4 cells (1 m) up
-          const airR  = _mRho[mt];
-          let heavy = 0;
-          for (let yy = by + 2; yy <= yTop; yy++) {
-            const r = gM[colBase + yy*N] / (8 * PVOL);
-            if (r > heavy) heavy = r;
+          const colBase = ax * N * N + az;
+          const myRho   = _mRho[mt];
+
+          // Implicit air drag — applies to ALL particle types when airborne.
+          const centerDen = gM[colBase + (by + 1) * N] / (8 * PVOL);
+          if (centerDen < myRho * 0.25) {
+            const drag = 0.015;
+            nvx *= (1 - drag); nvy *= (1 - drag); nvz *= (1 - drag);
           }
-          if (heavy > airR * 1.5) {       // a heavier fluid is resting on us
-            const rise = Math.min((heavy / airR - 1) * 0.10, 2.5);
-            if (nvy < rise) nvy = rise;   // assert a gentle terminal rise velocity
+
+          // General buoyancy — fluid particles only.
+          if (type === 0) {
+            const yTop = Math.min(N - 1, by + 2 + 4);
+            let maxAbove = 0;
+            for (let yy = by + 2; yy <= yTop; yy++) {
+              const r = gM[colBase + yy * N] / (8 * PVOL);
+              if (r > maxAbove) maxAbove = r;
+            }
+            if (maxAbove > myRho * 1.3) {
+              // sqrt scaling keeps rise velocity reasonable at very large contrasts.
+              const rise = Math.min(Math.sqrt(maxAbove / myRho - 1) * 0.5, 2.5);
+              if (nvy < rise) nvy = rise;
+            }
           }
         }
       }

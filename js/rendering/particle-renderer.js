@@ -44,22 +44,24 @@ export class ParticleRenderer {
     const dummy = this._dummy;
     const col   = this._col;
     const mesh  = this._mesh;
+    let n = 0;
 
     for (let p = 0; p < count; p++) {
       const o  = p * 4;
       const mt = data[o + 3] | 0;
+      if (mt === 8) continue;  // air is the implicit background — not rendered
 
       dummy.position.set(data[o], data[o + 1], data[o + 2]);
       dummy.updateMatrix();
-      mesh.setMatrixAt(p, dummy.matrix);
+      mesh.setMatrixAt(n, dummy.matrix);
 
-      const hex = MAT_COLS[mt] ?? 0xffffff;
-      col.setHex(hex);
-      mesh.setColorAt(p, col);
+      col.setHex(MAT_COLS[mt] ?? 0xffffff);
+      mesh.setColorAt(n, col);
+      n++;
     }
 
-    mesh.count = count;
-    if (count > 0) {
+    mesh.count = n;
+    if (n > 0) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
