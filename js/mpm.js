@@ -49,6 +49,10 @@ export const MATERIALS = [
   // id 7: Ice — stiff elastic, holds its shape and bounces
   // (E capped at 8e5 so the elastic wave speed stays CFL-stable at 5 substeps)
   { name:'Ice',   col:0xaadcff, rho:917,  E:8.0e5, nu:0.32, type:'elastic', cScale:1.00, vdamp:1.000 },
+  // id 8: Air — very light gas. rho is boosted to 40 (real ≈1.2) so the
+  // air/water mass ratio stays CFL-stable; buoyancy is applied explicitly in
+  // G2P (see "Archimedes" block) so air bubbles rise through denser fluids.
+  { name:'Air',   col:0x88aacc, rho:40,   E:5.0e4, type:'fluid',    cScale:1.00, vdamp:1.000 },
 ];
 
 const TYPE_CODE = { fluid: 0, granular: 1, elastic: 2 };
@@ -155,6 +159,7 @@ export class MPM {
     this._mLa   = new Float64Array(NM);
     this._mCs   = new Float64Array(NM); // cScale
     this._mVd   = new Float64Array(NM); // vdamp
+    this._mRho  = new Float64Array(NM); // density (for buoyancy)
     for (let i = 0; i < NM; i++) {
       const m = MATERIALS[i];
       this._mType[i] = TYPE_CODE[m.type] ?? 0;
@@ -164,6 +169,7 @@ export class MPM {
       this._mLa[i]   = m._la;
       this._mCs[i]   = m.cScale;
       this._mVd[i]   = m.vdamp;
+      this._mRho[i]  = m.rho;
     }
   }
 
@@ -216,8 +222,9 @@ export class MPM {
     const { N, INV, DX, PVOL, DINV,
             px, py, pz, pvx, pvy, pvz, pC, pF, pJ, pMt, nP,
             gM, gVx, gVy, gVz, _WX, _WY, _WZ,
-            _mType, _mMass, _mE, _mMu, _mLa, _mCs, _mVd } = this;
+            _mType, _mMass, _mE, _mMu, _mLa, _mCs, _mVd, _mRho } = this;
     const coef = -DT * PVOL * DINV;
+    const absG = Math.abs(this.gravity);
 
     /* ── RESET GRID ────────────────────────────────────────── */
     gM.fill(0); gVx.fill(0); gVy.fill(0); gVz.fill(0);
@@ -374,6 +381,34 @@ export class MPM {
             C0 += sc*gvx*dpx; C1 += sc*gvx*dpy; C2 += sc*gvx*dpz;
             C3 += sc*gvy*dpx; C4 += sc*gvy*dpy; C5 += sc*gvy*dpz;
             C6 += sc*gvz*dpx; C7 += sc*gvz*dpy; C8 += sc*gvz*dpz;
+          }
+        }
+      }
+
+      /* Buoyant rise for very light fluids (air, rho≈40).
+         Air and a surrounding heavy fluid share grid cells, so the single grid
+         velocity couples them: a PIC re-gather every substep would reset any
+         buoyant impulse back to the (near-static) water velocity, and the air
+         would never climb. So instead of adding a force, we assert a target
+         rise velocity whenever the parcel is submerged.
+         "Submerged" = a much heavier fluid exists in the grid column overhead.
+         We scan up to ~24 cells (6 m) up; grid mass per cell is ≈ 8·PVOL·rho
+         (weights partition unity, ~8 particles/cell). The rise speed grows with
+         the density contrast and is capped to a gentle terminal velocity. At the
+         surface nothing heavy is above, so the parcel stops and simply floats. */
+      if (type === 0 && _mRho[mt] < 100) {
+        const ax = bx + 1, az = bz + 1;
+        if (ax >= 0 && ax < N && az >= 0 && az < N) {
+          const colBase = (ax*N) * N + az;
+          const yTop = Math.min(N - 1, by + 2 + 24);
+          let heavy = 0;
+          for (let yy = by + 2; yy <= yTop; yy++) {
+            const r = gM[colBase + yy*N] / (8 * PVOL);
+            if (r > heavy) heavy = r;
+          }
+          if (heavy > _mRho[mt] * 2) {
+            const rise = Math.min((heavy / _mRho[mt] - 1) * 0.12, 3.0);
+            if (nvy < rise) nvy = rise;   // assert terminal rise velocity
           }
         }
       }

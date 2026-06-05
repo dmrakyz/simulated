@@ -84,43 +84,64 @@
     <button class="fab" id="fab-spawn">＋ Spawn</button>
 
     <!-- Transient hint -->
-    <div id="hint">Tap the world to pour · long-press to open palette</div>
+    <div id="hint">WORLD: tap to pour · BUILD: tap to place parts · ☰ for panels</div>
   </div>
 
-  <!-- Left panel: materials + spawn size -->
+  <!-- Left panel: WORLD (materials) + BUILD (creature editor) -->
   <div id="lp">
-    <div class="ptitle">Materials</div>
 
-    <button class="mfbtn on" data-m="0">
-      <div class="sw" style="background:#2288ff"></div>Water
-    </button>
-    <button class="mfbtn" data-m="1">
-      <div class="sw" style="background:#ddbb55"></div>Sand
-    </button>
-    <button class="mfbtn" data-m="2">
-      <div class="sw" style="background:#ff5500"></div>Lava
-    </button>
-    <button class="mfbtn" data-m="3">
-      <div class="sw" style="background:#ddeeff"></div>Snow
-    </button>
-    <button class="mfbtn" data-m="4">
-      <div class="sw" style="background:#ffbb22"></div>Honey
-    </button>
-    <button class="mfbtn" data-m="5">
-      <div class="sw" style="background:#7a5c3a"></div>Mud
-    </button>
-    <button class="mfbtn" data-m="6">
-      <div class="sw" style="background:#334422"></div>Oil
-    </button>
-    <button class="mfbtn" data-m="7">
-      <div class="sw" style="background:#aaddff"></div>Ice
-    </button>
+    <!-- WORLD mode -->
+    <div id="world-panel">
+      <div class="ptitle">Materials</div>
 
-    <div class="ptitle" style="margin-top:16px">Spawn Size</div>
-    <input type="range" id="spawn-size" min="0.5" max="4" step="0.25" value="1.5">
-    <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px">
-      Size: <span id="size-label">1.5</span> m
+      <button class="mfbtn on" data-m="0">
+        <div class="sw" style="background:#2288ff"></div>Water
+      </button>
+      <button class="mfbtn" data-m="1">
+        <div class="sw" style="background:#ddbb55"></div>Sand
+      </button>
+      <button class="mfbtn" data-m="2">
+        <div class="sw" style="background:#ff5500"></div>Lava
+      </button>
+      <button class="mfbtn" data-m="3">
+        <div class="sw" style="background:#ddeeff"></div>Snow
+      </button>
+      <button class="mfbtn" data-m="4">
+        <div class="sw" style="background:#ffbb22"></div>Honey
+      </button>
+      <button class="mfbtn" data-m="5">
+        <div class="sw" style="background:#7a5c3a"></div>Mud
+      </button>
+      <button class="mfbtn" data-m="6">
+        <div class="sw" style="background:#334422"></div>Oil
+      </button>
+      <button class="mfbtn" data-m="7">
+        <div class="sw" style="background:#aaddff"></div>Ice
+      </button>
+      <button class="mfbtn" data-m="8">
+        <div class="sw" style="background:#88aacc;opacity:.6"></div>Air
+      </button>
+
+      <div class="ptitle" style="margin-top:16px">Spawn Size</div>
+      <input type="range" id="spawn-size" min="0.5" max="4" step="0.25" value="1.5">
+      <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px">
+        Size: <span id="size-label">1.5</span> m
+      </div>
+
+      <div class="ptitle" style="margin-top:14px">Tips</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.4);line-height:1.7">
+        Air bubbles rise through water<br>
+        Lava sinks through water<br>
+        Oil floats above mud<br>
+        Snow & ice hold their shape
+      </div>
     </div>
+
+    <!-- BUILD mode: populated by CreatureBuilder.buildPartPanelHTML() -->
+    <div id="build-panel" style="display:none">
+      <div id="build-panel-inner"></div>
+    </div>
+
   </div>
 
   <!-- Right panel: properties GUI mount -->

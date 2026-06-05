@@ -139,6 +139,51 @@ body.rp-open #rp { transform: none; }
 }
 .sw { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
 
+/* ── Creature Builder panel ─────────────────────────────── */
+.part-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.part-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+  background: transparent; color: rgba(255,255,255,0.7);
+  font-size: 11px; cursor: pointer; text-align: left;
+  transition: background .12s;
+  touch-action: manipulation;
+}
+.part-btn:hover { background: rgba(255,255,255,0.05); }
+.part-btn.on {
+  background: rgba(0,229,255,0.1);
+  border-color: rgba(0,229,255,0.3);
+  color: #00e5ff;
+}
+
+.cbtn-row { display: flex; gap: 5px; margin-bottom: 5px; }
+.cbtn {
+  flex: 1; padding: 7px 6px;
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+  background: transparent; color: rgba(255,255,255,0.7);
+  font-size: 11px; cursor: pointer; white-space: nowrap;
+  transition: background .12s;
+  touch-action: manipulation;
+}
+.cbtn:hover { background: rgba(255,255,255,0.05); }
+.cbtn.on {
+  background: rgba(0,229,255,0.12);
+  border-color: rgba(0,229,255,0.32);
+  color: #00e5ff;
+}
+
+#sel-info {
+  margin-top: 14px; padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07); border-radius: 6px;
+  font-size: 10px; color: rgba(255,255,255,0.55); line-height: 1.5;
+}
+
 /* ── HUD (top-right) ────────────────────────────────────── */
 #hud {
   position: absolute; top: 8px; right: 8px;
