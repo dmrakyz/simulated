@@ -52,7 +52,7 @@ function hideLoader() {
    Desktops with many cores get a far higher budget than phones. */
 const _cores    = navigator.hardwareConcurrency || 4;
 const _isDesk   = window.matchMedia('(pointer:fine)').matches && _cores >= 8;
-const MAXP      = _isDesk ? 30000 : 13000;
+const MAXP      = _isDesk ? 300000 : 50000;
 const SUBSTEPS  = 5;   // CFL-stable for the tuned stiffnesses; lower = faster
 
 /* ── Bootstrap ──────────────────────────────────────────────────── */
