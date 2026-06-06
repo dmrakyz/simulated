@@ -154,5 +154,64 @@ console.log('\n[accuracy] momentum-exchange drag coefficient is order-1');
   console.log(`    flat-plate Cd ≈ ${Cd.toFixed(2)} (textbook ≈ 1.1–2.0)`);
 }
 
+/* ── OBB inclined plate is a wing, not a brick (the lift fix) ──────── */
+console.log('\n[OBB] oriented thin plate develops lift with low drag');
+{
+  // Same thin plate rasterized two ways at the same angle of attack:
+  //   (a) as an oriented box (OBB) → a true inclined sheet
+  //   (b) as its axis-aligned bounding box (AABB) → a solid brick
+  // The OBB must produce a far better lift-to-drag ratio. A brick is thin in
+  // no axis, so it can only make drag; that was the "massive drag, no lift" bug.
+  const dims = [28, 40, 56];   // x=span, y=vertical(lift), z=flow
+  const dx = 0.05;
+  const U = [0, 0, 0.08];      // free stream along +z
+  const theta = 18 * Math.PI / 180;
+  const cs = Math.cos(theta), sn = Math.sin(theta);
+  const center = [dims[0] * dx / 2, dims[1] * dx / 2, dims[2] * dx / 2];
+  const spanH = 0.4, chordH = 0.25, thin = 0.0;
+
+  // OBB plate: span on X, normal & chord rotated about X by theta.
+  const obb = {
+    position: center,
+    halfSize: [spanH, thin, chordH],
+    axes: [[1, 0, 0], [0, cs, sn], [0, -sn, cs]],
+    velocity: [0, 0, 0],
+  };
+  // AABB plate: the same plate's world bounding box (no orientation).
+  const aabb = {
+    position: center,
+    halfSize: [spanH, chordH * sn, chordH * cs],
+    velocity: [0, 0, 0],
+  };
+
+  function runForce(part) {
+    const lvl = new LbmLevel(dims, dx, { tau: 0.6 });
+    const mask = allocMask(dims);
+    buildMask(mask, [part], [0, 0, 0], dx);
+    let fy = 0, fz = 0, ns = 0;
+    for (let s = 0; s < 900; s++) {
+      lvl.step(U, mask);
+      if (s > 650) { fy += lvl.forceLattice[1]; fz += lvl.forceLattice[2]; ns++; }
+    }
+    return { mask, fy: fy / ns, fz: fz / ns };
+  }
+
+  const o = runForce(obb);
+  const a = runForce(aabb);
+  const ldOBB = Math.abs(o.fy) / (Math.abs(o.fz) + 1e-9);
+  const ldAABB = Math.abs(a.fy) / (Math.abs(a.fz) + 1e-9);
+
+  check('OBB rasterizes a thin sheet (fewer cells than the AABB brick)', o.mask.count < a.mask.count, `obb=${o.mask.count} aabb=${a.mask.count}`);
+  check('OBB lift is nonzero & finite', Math.abs(o.fy) > 1e-6 && Number.isFinite(o.fy), `fy=${o.fy.toExponential(2)}`);
+  check('OBB drag points downstream (+z)', o.fz > 0, `fz=${o.fz.toExponential(2)}`);
+  // The AABB brick makes essentially no lift (it is thin in no axis); the OBB
+  // makes real lift. A coarse stair-stepped sheet at 18° (near stall) lands
+  // around L/D ~0.3–0.5, not the textbook cot(18°)≈3 — good enough for a game.
+  check('OBB is wing-like (L/D > 0.3)', ldOBB > 0.3, `L/D=${ldOBB.toFixed(2)}`);
+  check('OBB makes lift where the brick makes ~none', ldOBB > ldAABB * 2 + 0.1, `obb=${ldOBB.toFixed(2)} brick=${ldAABB.toFixed(2)}`);
+  console.log(`    OBB lift=${o.fy.toExponential(2)} drag=${o.fz.toExponential(2)} L/D=${ldOBB.toFixed(2)}  |  brick lift=${a.fy.toExponential(2)} L/D=${ldAABB.toFixed(2)}`);
+  console.log(`    (sign: +theta about X → fy ${o.fy > 0 ? 'positive (up)' : 'negative (down)'} for +z flow)`);
+}
+
 console.log(`\n${failed === 0 ? '✓ ALL PASS' : '✗ FAILURES'} — ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

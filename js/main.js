@@ -357,10 +357,33 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
     if (m === 'simulate') _startAero(); else _stopAero();
   }
 
+  /* Angle of attack is applied as a real, visible rotation of the wing/fin
+     meshes about their span (local X) axis. The aero solver then reads the
+     tilted geometry directly — the shape drives the lift, not a coefficient. */
+  const _wingBase = new Map(); // nodeId → original rotation.x
+  function _applyAoA(deg) {
+    if (!builder) return;
+    // Forward flight is +Z, so the Galilean far-field flows in −Z. A positive
+    // AoA must pitch the leading edge up (which is −rotation.x in this frame)
+    // to produce upward lift — verified by the OBB sign test.
+    const rad = -deg * Math.PI / 180;
+    for (const n of builder.nodes.values()) {
+      if (n.type !== 'WING' && n.type !== 'FIN') continue;
+      if (!_wingBase.has(n.id)) _wingBase.set(n.id, n.obj.rotation.x);
+      n.obj.rotation.x = _wingBase.get(n.id) + rad;
+    }
+  }
+  function _restoreAoA() {
+    if (!builder) return;
+    for (const [id, rx] of _wingBase) { const n = builder.nodes.get(id); if (n) n.obj.rotation.x = rx; }
+    _wingBase.clear();
+  }
+
   /* ── SIMULATE: spin up creature aerodynamics from the built creature ── */
   function _startAero() {
     if (!aero) return;
-    const parts = AeroController.partsFromBuilder(builder, THREE, aoaDeg);
+    _applyAoA(aoaDeg);
+    const parts = AeroController.partsFromBuilder(builder, THREE);
     const info = document.getElementById('aero-info');
     if (parts.length === 0) {
       if (info) info.textContent = 'No creature — build one in BUILD mode first.';
@@ -390,6 +413,7 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
 
   function _stopAero() {
     if (aero) aero.stop();
+    _restoreAoA();
     if (flowRenderer) flowRenderer.setVisible(false);
     const haero = document.getElementById('haero');
     if (haero) haero.style.display = 'none';
@@ -415,8 +439,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
     aoaDeg = +e.target.value;
     document.getElementById('aero-aoa-val').textContent = aoaDeg;
     if (aero?.active && builder) {
-      // Rebuild solid mask with new AoA — flow state continues without full restart.
-      aero.setParts(AeroController.partsFromBuilder(builder, THREE, aoaDeg));
+      // Tilt the actual wing meshes (you see them rotate), then rebuild the
+      // solid mask from the new geometry. Flow state continues — no full restart.
+      _applyAoA(aoaDeg);
+      aero.setParts(AeroController.partsFromBuilder(builder, THREE));
     }
   });
 

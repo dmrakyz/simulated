@@ -92,7 +92,11 @@ export class CreatureBuilder {
       case 'sphere':  return new T.SphereGeometry(s[0], 16, 12);
       case 'box':     return new T.BoxGeometry(s[0], s[1], s[2] ?? s[0]);
       case 'cone':    return new T.ConeGeometry(s[0], s[1], 12);
-      case 'plane':   return new T.PlaneGeometry(s[0], s[1]);
+      // Lay wings/fins flat (span on X, chord on Z, normal up on Y) so they act
+      // as lifting surfaces: edge-on to forward flight at 0° and developing lift
+      // as angle of attack tilts them. A raw PlaneGeometry sits in XY (normal on
+      // Z) — face-on to flight, i.e. a parachute, which is all drag and no lift.
+      case 'plane':   { const g = new T.PlaneGeometry(s[0], s[1]); g.rotateX(-Math.PI / 2); return g; }
       default:        return new T.SphereGeometry(0.3, 12, 8);
     }
   }
@@ -314,12 +318,14 @@ export class CreatureBuilder {
         leg.obj.rotation.x = Math.PI * 0.04;
       }
     } else if (name === 'bird') {
+      // Wings lie flat (normal up). rotation.z gives dihedral (tips raised);
+      // angle of attack is added in SIMULATE mode as a pitch about the span.
       this._addNode('TORSO', V(cx, y, cz), { scale: 0.8 });
       this._addNode('HEAD',  V(cx, y + 0.4, cz + 0.7), { scale: 0.6 });
-      const wl = this._addNode('WING', V(cx - 0.8, y + 0.2, cz));
-      wl.obj.rotation.z = Math.PI * 0.10;
-      const wr = this._addNode('WING', V(cx + 0.8, y + 0.2, cz));
-      wr.obj.rotation.z = -Math.PI * 0.10; wr.obj.scale.x *= -1;
+      const wl = this._addNode('WING', V(cx - 0.8, y + 0.15, cz));
+      wl.obj.rotation.z = Math.PI * 0.06;
+      const wr = this._addNode('WING', V(cx + 0.8, y + 0.15, cz));
+      wr.obj.rotation.z = -Math.PI * 0.06; wr.obj.scale.x *= -1;
       this.chainLen = 4; this._addNode('TAIL', V(cx, y, cz - 0.8)); this.chainLen = savedChain;
     }
 

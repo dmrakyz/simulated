@@ -99,29 +99,14 @@ export class AeroController {
   }
 
   /**
-   * Build part records from CreatureBuilder nodes (Three.js Object3D graph).
-   *
-   * @param aoaDeg  Angle of attack in degrees applied to WING/FIN parts by
-   *                temporarily rotating them around their local X axis (span).
-   *                Positive values tilt the leading edge up → upward lift when
-   *                the creature moves forward (+Z). The visual mesh is unchanged.
+   * Build oriented part records from CreatureBuilder nodes (Three.js graph).
+   * Reads each mesh's current world transform, so any wing tilt the user has
+   * applied (angle of attack, dihedral, sweep) drives the flow directly.
    */
-  static partsFromBuilder(builder, THREE, aoaDeg = 0) {
+  static partsFromBuilder(builder, THREE) {
     if (!builder || !builder.nodes) return [];
-    const aoaRad = aoaDeg * Math.PI / 180;
-    const restores = [];
     const nodes = [];
-    for (const n of builder.nodes.values()) {
-      if (aoaRad !== 0 && (n.type === 'WING' || n.type === 'FIN')) {
-        // Save original rotation and apply AoA offset so Box3.setFromObject
-        // (called inside nodesToParts) captures the tilted bounding box.
-        restores.push({ obj: n.obj, rx: n.obj.rotation.x });
-        n.obj.rotation.x += aoaRad;
-      }
-      nodes.push({ id: n.id, type: n.type, obj: n.obj, parentId: null });
-    }
-    const parts = nodesToParts(nodes, THREE);
-    for (const { obj, rx } of restores) obj.rotation.x = rx;
-    return parts;
+    for (const n of builder.nodes.values()) nodes.push({ id: n.id, type: n.type, obj: n.obj, parentId: null });
+    return nodesToParts(nodes, THREE);
   }
 }

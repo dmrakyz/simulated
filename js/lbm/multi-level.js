@@ -149,29 +149,59 @@ function kinematicToLatticeNu(desc, fps) {
 }
 
 /**
- * Adapter: convert CreatureBuilder Three.js nodes → part records.
- * Needs THREE for Box3. Kept here so the worker/main can call it; the math
- * modules above stay Three-free and headless-testable.
+ * Adapter: convert CreatureBuilder Three.js nodes → ORIENTED part records.
+ * Needs THREE for matrix math. Kept here so the worker/main can call it; the
+ * math modules above stay Three-free and headless-testable.
+ *
+ * Each mesh becomes one oriented box (OBB): its local geometry bounding box,
+ * placed at its world position with its world rotation. This preserves the
+ * inclined surface of a tilted wing (the source of lift) instead of collapsing
+ * it into an axis-aligned bounding brick. A chain (Group of meshes, e.g. a
+ * spine) yields one OBB per segment.
  *
  * @param nodes iterable of { id, type, obj, parentId? } (obj = Object3D)
  * @param THREE the three.js module
  */
 export function nodesToParts(nodes, THREE) {
-  const box = new THREE.Box3();
-  const size = new THREE.Vector3();
   const center = new THREE.Vector3();
   const parts = [];
   for (const n of nodes) {
-    box.setFromObject(n.obj);
-    if (box.isEmpty()) continue;
-    box.getSize(size); box.getCenter(center);
-    parts.push({
-      id: n.id,
-      parentId: n.parentId ?? null,
-      position: [center.x, center.y, center.z],
-      halfSize: [size.x / 2, size.y / 2, size.z / 2],
-      velocity: n.velocity ?? [0, 0, 0],
-      type: n.type,
+    n.obj.updateWorldMatrix(true, true);
+    let sub = 0;
+    n.obj.traverse((o) => {
+      if (!o.isMesh || !o.geometry) return;
+      const geo = o.geometry;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      const lhx = (bb.max.x - bb.min.x) / 2;
+      const lhy = (bb.max.y - bb.min.y) / 2;
+      const lhz = (bb.max.z - bb.min.z) / 2;
+
+      // World basis columns of the mesh matrix; their lengths are the scales.
+      const m = o.matrixWorld.elements;
+      const sx = Math.hypot(m[0], m[1], m[2]) || 1;
+      const sy = Math.hypot(m[4], m[5], m[6]) || 1;
+      const sz = Math.hypot(m[8], m[9], m[10]) || 1;
+      const axes = [
+        [m[0] / sx, m[1] / sx, m[2] / sx],
+        [m[4] / sy, m[5] / sy, m[6] / sy],
+        [m[8] / sz, m[9] / sz, m[10] / sz],
+      ];
+
+      // World center = mesh world matrix applied to the local bbox center.
+      center.set((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2);
+      center.applyMatrix4(o.matrixWorld);
+
+      parts.push({
+        id: sub === 0 ? n.id : `${n.id}:${sub}`,
+        parentId: n.parentId ?? null,
+        position: [center.x, center.y, center.z],
+        halfSize: [lhx * sx, lhy * sy, lhz * sz],
+        axes,
+        velocity: n.velocity ?? [0, 0, 0],
+        type: n.type,
+      });
+      sub++;
     });
   }
   return parts;

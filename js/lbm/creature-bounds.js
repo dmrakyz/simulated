@@ -43,9 +43,14 @@ export function creatureBounds(parts) {
   const max = [-Infinity, -Infinity, -Infinity];
   for (const p of parts) {
     const hs = p.halfSize ?? [0, 0, 0];
+    const axes = p.axes ?? null;
     for (let i = 0; i < 3; i++) {
-      min[i] = Math.min(min[i], p.position[i] - hs[i]);
-      max[i] = Math.max(max[i], p.position[i] + hs[i]);
+      // World extent of this (possibly oriented) box along world axis i.
+      const ext = axes
+        ? Math.abs(axes[0][i]) * hs[0] + Math.abs(axes[1][i]) * hs[1] + Math.abs(axes[2][i]) * hs[2]
+        : hs[i];
+      min[i] = Math.min(min[i], p.position[i] - ext);
+      max[i] = Math.max(max[i], p.position[i] + ext);
     }
   }
   const W = max[0] - min[0];
