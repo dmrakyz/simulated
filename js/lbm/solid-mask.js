@@ -43,14 +43,22 @@ export function clearMask(mask) {
  * Rasterize one box part into the mask.
  * @param origin world-space min corner of the grid
  * @param dx     cell size
+ *
+ * IMPORTANT: PlaneGeometry parts (wings, fins) have zero thickness in one
+ * world-space axis after Three.js Box3.getSize(). A zero half-size axis marks
+ * 0 or 1 cells → no pressure differential across the wing → zero lift/drag.
+ * We pad every half-size to at least `dx` so every part occupies at least
+ * a 2-cell layer in every direction. This is the minimum needed to produce
+ * a pressure difference (high-pressure upstream, low-pressure downstream).
  */
 export function rasterizePart(mask, part, origin, dx) {
   const { dims, solid, wallVel } = mask;
   const vel = part.velocity ?? [0, 0, 0];
   const lo = [0, 0, 0], hi = [0, 0, 0];
   for (let a = 0; a < 3; a++) {
-    const minW = part.position[a] - part.halfSize[a];
-    const maxW = part.position[a] + part.halfSize[a];
+    const h = Math.max(part.halfSize[a], dx);   // ← minimum 1 full cell thickness
+    const minW = part.position[a] - h;
+    const maxW = part.position[a] + h;
     lo[a] = Math.max(0, Math.floor((minW - origin[a]) / dx));
     hi[a] = Math.min(dims[a] - 1, Math.ceil((maxW - origin[a]) / dx));
   }

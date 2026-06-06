@@ -23,6 +23,17 @@ let sim = null;
 let running = false;
 let velocity = [0, 0, 0];
 
+// Physics runs at most at TARGET_HZ. This is the primary battery knob: running
+// at 15 Hz instead of 30 Hz halves the CPU energy spent with no visible
+// difference in the flow visualization (it updates between rendered frames anyway).
+const TARGET_HZ = 15;
+const TARGET_MS  = 1000 / TARGET_HZ;
+
+// Adaptive substep throttle: if a step takes longer than THROTTLE_THRESHOLD_MS
+// we dial down nSub on the fine level to keep the worker responsive.
+const THROTTLE_THRESHOLD_MS = 40;
+const THROTTLE_MIN_SUB = 2;
+
 function buildFlowSnapshot() {
   // Downsample the FAG velocity field to a coarse arrow grid (cap ~8³ samples).
   const fag = sim.fag;
@@ -53,11 +64,18 @@ function loop() {
   sim.step();
   const tickMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
 
+  // Adaptive throttle: if the fine level is taking too long, reduce its substep
+  // count so the worker never saturates the CPU core.
+  if (tickMs > THROTTLE_THRESHOLD_MS && sim.fag.nSub > THROTTLE_MIN_SUB) {
+    sim.fag.nSub = Math.max(THROTTLE_MIN_SUB, sim.fag.nSub - 1);
+  }
+
   const flow = buildFlowSnapshot();
   postMessage({ type: 'snapshot', force: sim.netForce(), flow, tickMs }, [flow.vec.buffer]);
 
-  // Pace to ~30 Hz physics; rendering interpolates.
-  setTimeout(loop, Math.max(0, 33 - tickMs));
+  // Always sleep at least TARGET_MS so we never pin the CPU core.
+  // If the step itself was slow we still sleep the full interval.
+  setTimeout(loop, Math.max(TARGET_MS, TARGET_MS - tickMs + 5));
 }
 
 self.onmessage = (e) => {

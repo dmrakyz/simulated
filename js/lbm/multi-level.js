@@ -102,14 +102,19 @@ export class MultiLevelLBM {
   }
 
   /**
-   * Net aerodynamic force on the creature (N), from momentum imparted to the
-   * fine-grid fluid by the solid cells. Converts lattice momentum to physical
-   * using ρ_air, Δx, Δt. Sign: force on body = −force on fluid.
+   * Net aerodynamic force on the creature (N).
+   *
+   * Uses the perturbation method: total fluid momentum minus background flow.
+   * This isolates the creature's pressure signature from the uninformative
+   * bulk-flow term that dominated the previous total-momentum calculation.
    */
   netForce(rhoAir = 1.225) {
-    const m = this.fag.fluidMomentum();
+    // Current smoothed lattice inlet (background flow to subtract).
+    const inletLatt = this.toLatticeVel(this.fag, this.uSmooth);
+    const m = this.fag.aerodynamicForce(inletLatt);
     const { dt } = this.fag.sound;
-    const k = (rhoAir * Math.pow(this.fag.dx, 3)) / dt; // (kg/m³·m³)/s = kg/s → ·(m/step) = N
+    const k = (rhoAir * Math.pow(this.fag.dx, 3)) / dt;
+    // Sign: positive perturbation = fluid being pushed; reaction force on body is opposite.
     return [-m[0] * k, -m[1] * k, -m[2] * k];
   }
 

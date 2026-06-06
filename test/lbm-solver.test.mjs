@@ -29,6 +29,21 @@ console.log('\n[mask] rasterization');
   check('wall velocity stored on solid cell', mask.wallVel[flatIdx(5, 5, 5, dims) * 3] === 1);
 }
 
+/* ── flat-plane wing gets minimum thickness (the lift bug fix) ─────── */
+console.log('\n[mask] flat plane wing gets solid cells');
+{
+  const dx = 0.1;
+  const dims = [20, 20, 20];
+  const mask = allocMask(dims);
+  // PlaneGeometry gives halfSize ≈ [0.7, 0.45, 0] — zero in the normal axis.
+  // The fix: pad every axis to at least dx so the plane rasterizes as a slab.
+  rasterizePart(mask, { position: [1.0, 1.0, 1.0], halfSize: [0.7, 0.45, 0.0], velocity: [0, 0, 0] }, [0, 0, 0], dx);
+  check('flat wing (halfSize z=0) still marks solid cells', mask.count > 0, `count=${mask.count}`);
+  // The center cell in z should be solid even though the original halfSize was 0.
+  const ci = Math.round(1.0 / dx), cj = Math.round(1.0 / dx), ck = Math.round(1.0 / dx);
+  check('wing center cell is solid after padding', mask.solid[flatIdx(ci, cj, ck, dims)] === SOLID, `solid[${ci},${cj},${ck}]`);
+}
+
 /* ── mass conservation + quiescence ───────────────────────────────── */
 console.log('\n[D] quiescent fluid stays still & mass-stable');
 {
@@ -92,6 +107,20 @@ console.log('\n[A] inclined plate in flow → net transverse force');
   check('plate deflects flow transversely (nonzero u_y signal)', Math.abs(fy) > 1e-4, `Σρu_y≈${fy.toExponential(2)}`);
   check('simulation remained finite/stable', Number.isFinite(fy));
   console.log(`    transverse signal Σρu_y ≈ ${fy.toExponential(2)} (sign = deflection direction)`);
+}
+
+/* ── aerodynamicForce vs fluidMomentum ────────────────────────────── */
+console.log('\n[force] perturbation method vs total-momentum');
+{
+  const lvl = new LbmLevel([16, 12, 12], 0.1, { tau: 0.6 });
+  const U = [0.08, 0, 0];
+  for (let s = 0; s < 200; s++) lvl.step(U, null);
+  // No obstacle: total momentum is large (background flow), perturbation is ~0.
+  const total = lvl.fluidMomentum();
+  const perturb = lvl.aerodynamicForce(U);
+  check('total momentum large in flow direction', Math.abs(total[0]) > 1, `mx=${total[0].toFixed(2)}`);
+  check('aerodynamicForce near zero with no obstacle', Math.abs(perturb[0]) < 1, `Δmx=${perturb[0].toExponential(2)}`);
+  console.log(`    totalMomentum_x=${total[0].toFixed(1)}  perturbation_x=${perturb[0].toExponential(2)}`);
 }
 
 console.log(`\n${failed === 0 ? '✓ ALL PASS' : '✗ FAILURES'} — ${passed} passed, ${failed} failed\n`);

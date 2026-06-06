@@ -17,13 +17,13 @@
  */
 
 export const DEFAULTS = {
-  N_MAX: 128,    // max cells along the creature's longest axis at L0
-  N_MIN: 16,     // floor so tiny creatures still get a usable grid
-  DX_MIN: 0.02,  // finest resolution, 2 cm — guards against absurd cell counts
-  DX_MAX: 2.0,   // coarsest L0 resolution
-  PAD: 0.35,     // fractional margin of air around the creature at L0
-  RATIO: 4,      // refinement ratio between consecutive levels
-  N_SUB: [10, 5, 3], // substeps/frame per level (fine runs more often)
+  N_MAX: 64,    // max cells per axis at L0 — 64 gives good wing detail without melting phones
+  N_MIN: 16,    // floor so tiny creatures still get a usable grid
+  DX_MIN: 0.02, // finest resolution, 2 cm
+  DX_MAX: 2.0,  // coarsest L0 resolution
+  PAD: 0.35,    // fractional margin of air around the creature at L0
+  RATIO: 4,     // refinement ratio between consecutive levels
+  N_SUB: [5, 3, 2], // substeps/frame — enough for a game, won't kill a phone battery
   LABELS: ['FAG', 'NFF', 'CWG'],
 };
 
@@ -34,10 +34,11 @@ function ceilOdd(x) {
   return n;
 }
 
-/** Odd cell count clamped to [lo, hi]; when hi is even we drop to hi-1 to stay odd. */
+/** Odd cell count clamped to [lo, hi]; both bounds are rounded to odd. */
 function oddClamp(x, lo, hi) {
+  const loOdd = lo % 2 === 0 ? lo + 1 : lo; // ensure floor is also odd
   const hiOdd = hi % 2 === 0 ? hi - 1 : hi;
-  return Math.max(lo, Math.min(hiOdd, ceilOdd(x)));
+  return Math.min(hiOdd, Math.max(loOdd, ceilOdd(x)));
 }
 
 function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }

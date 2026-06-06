@@ -29,7 +29,7 @@ const sim = new MultiLevelLBM(bird, { gridOpts: { N_MAX: 32, N_MIN: 12 } });
   check('three levels present', st.levels.length === 3, JSON.stringify(st.levels.map((l) => l.label)));
   check('FAG has solid cells from the creature', st.solidCells > 0, `solid=${st.solidCells}`);
   check('coarser levels have larger Δx', st.levels[2].dx > st.levels[0].dx);
-  check('substep cadence 10/5/3', st.levels.map((l) => l.nSub).join() === '10,5,3');
+  check('substep cadence 5/3/2 (default)', st.levels.map((l) => l.nSub).join() === '5,3,2');
   console.log(`    ${st.levels.map((l) => `${l.label} ${l.dims.join('×')} Δx=${l.dx}`).join('  |  ')}`);
 }
 

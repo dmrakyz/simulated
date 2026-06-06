@@ -182,9 +182,10 @@ async function main() {
     if (aero.active) {
       if (!aero.isWorker) aero.stepLocal();
       if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
-      const f = aero.force, mag = Math.hypot(f[0], f[1], f[2]);
+      const f = aero.force;
+      // y = lift (up/down), z = drag/thrust (along flight axis). Show separately.
       const fEl = document.getElementById('hforce');
-      if (fEl) fEl.textContent = `${mag.toFixed(1)} N (lift ${f[1] >= 0 ? '+' : ''}${f[1].toFixed(1)})`;
+      if (fEl) fEl.textContent = `lift ${f[1].toFixed(1)} N  drag ${Math.abs(f[2]).toFixed(1)} N`;
     }
 
     if (orbit) orbit.update();
@@ -365,9 +366,15 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
       if (info) info.textContent = 'No creature — build one in BUILD mode first.';
       return;
     }
+    // Size the grid to the device: mobile gets half the cell count.
+    // N_MAX=32 → at most 32 cells on the longest axis; phone CPUs handle this comfortably.
+    const gridOpts = _isDesk
+      ? { N_MAX: 64, N_SUB: [5, 3, 2] }
+      : { N_MAX: 32, N_MIN: 12, N_SUB: [3, 2, 1] };
+
     // The creature stays visible in SIMULATE so you can watch flow around it.
     if (builder) builder.root.visible = true;
-    aero.start(parts).then((where) => {
+    aero.start(parts, gridOpts).then((where) => {
       aero.setVelocity([0, 0, aeroSpeed]);
       const st = aero.stats;
       if (info && st) {

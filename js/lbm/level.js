@@ -153,17 +153,39 @@ export class LbmLevel {
     const tmp = this.f; this.f = this.f2; this.f2 = tmp;
   }
 
-  /** Net momentum imparted to the fluid by solid cells (proxy for −force on body). */
-  fluidMomentum() {
-    let mx = 0, my = 0, mz = 0;
-    for (let c = 0; c < this.n; c++) { mx += this.rho[c] * this.ux[c]; my += this.rho[c] * this.uy[c]; mz += this.rho[c] * this.uz[c]; }
-    return [mx, my, mz];
+  /**
+   * Aerodynamic perturbation force — the correct measurement for lift/drag.
+   *
+   * Total fluid momentum contains the background flow (every cell moving at
+   * u_inlet), which completely dominates and makes the number meaningless (that
+   * was the "985 N" bug). Subtracting the background leaves only the momentum
+   * perturbation caused by the creature's pressure field.
+   *
+   * @param inletVel lattice-unit inlet velocity (from toLatticeVel in multi-level)
+   */
+  aerodynamicForce(inletVel = [0, 0, 0]) {
+    let totalRho = 0, dmx = 0, dmy = 0, dmz = 0;
+    for (let c = 0; c < this.n; c++) {
+      const r = this.rho[c];
+      totalRho += r;
+      dmx += r * (this.ux[c] - inletVel[0]);
+      dmy += r * (this.uy[c] - inletVel[1]);
+      dmz += r * (this.uz[c] - inletVel[2]);
+    }
+    return [dmx, dmy, dmz];
   }
 
   totalMass() {
     let m = 0;
     for (let c = 0; c < this.n; c++) m += this.rho[c];
     return m;
+  }
+
+  /** Raw total momentum — kept for tests; use aerodynamicForce() for display. */
+  fluidMomentum() {
+    let mx = 0, my = 0, mz = 0;
+    for (let c = 0; c < this.n; c++) { mx += this.rho[c] * this.ux[c]; my += this.rho[c] * this.uy[c]; mz += this.rho[c] * this.uz[c]; }
+    return [mx, my, mz];
   }
 }
 
