@@ -15,6 +15,7 @@
  */
 
 import { PART_TYPES, PART_ORDER, JOINT_TYPES } from './parts.js';
+import { airfoilProfile } from '../lbm/airfoil.js';
 
 let _uid = 0;
 
@@ -92,25 +93,60 @@ export class CreatureBuilder {
       case 'sphere':  return new T.SphereGeometry(s[0], 16, 12);
       case 'box':     return new T.BoxGeometry(s[0], s[1], s[2] ?? s[0]);
       case 'cone':    return new T.ConeGeometry(s[0], s[1], 12);
-      // Lay wings/fins flat (span on X, chord on Z, normal up on Y) so they act
-      // as lifting surfaces: edge-on to forward flight at 0° and developing lift
-      // as angle of attack tilts them. A raw PlaneGeometry sits in XY (normal on
-      // Z) — face-on to flight, i.e. a parachute, which is all drag and no lift.
+      // A real NACA airfoil lofted across the span — span on local X, chord on
+      // local Z (leading edge at +Z), thickness/camber on local Y (up). This is
+      // the exact convention the solid-mask rasterizer voxelizes, so the wing
+      // you see is the wing the air feels. 0° AoA = edge-on to flight.
+      case 'airfoil': return this._airfoilGeometry(s[0], s[1], def.airfoil ?? { m: 0.04, p: 0.4, t: 0.12 });
       case 'plane':   { const g = new T.PlaneGeometry(s[0], s[1]); g.rotateX(-Math.PI / 2); return g; }
       default:        return new T.SphereGeometry(0.3, 12, 8);
     }
   }
 
+  /** Loft a NACA section across the span into a closed solid wing geometry. */
+  _airfoilGeometry(span, chord, af) {
+    const T = this.THREE;
+    const prof = airfoilProfile(af.m, af.p, af.t, 28); // [chordFrac, normalFrac]
+    const np = prof.length;
+    const sh = span / 2, ch = chord / 2;
+    const pos = [];
+    // Two span stations; profile placed with LE at +Z, normal on Y.
+    for (const sx of [-sh, sh]) {
+      for (const [xf, yf] of prof) { pos.push(sx, yf * chord, ch - xf * chord); }
+    }
+    const idx = [];
+    for (let i = 0; i < np; i++) {              // side surface (span quads)
+      const a = i, b = (i + 1) % np, a2 = i + np, b2 = ((i + 1) % np) + np;
+      idx.push(a, b, b2, a, b2, a2);
+    }
+    // End caps: fan each station's profile around its centroid (DoubleSide
+    // material, so winding doesn't matter visually).
+    for (let st = 0; st < 2; st++) {
+      let cy = 0, cz = 0;
+      for (let i = 0; i < np; i++) { cy += pos[(st * np + i) * 3 + 1]; cz += pos[(st * np + i) * 3 + 2]; }
+      cy /= np; cz /= np;
+      const cIdx = pos.length / 3; pos.push((st === 0 ? -sh : sh), cy, cz);
+      for (let i = 0; i < np; i++) idx.push(cIdx, st * np + i, st * np + (i + 1) % np);
+    }
+    const g = new T.BufferGeometry();
+    g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    g.computeBoundingBox();
+    return g;
+  }
+
   _makeMaterial(def) {
     const T = this.THREE;
-    const thin = def.geom === 'plane';
+    const wing = def.geom === 'airfoil';
+    const plane = def.geom === 'plane';
     return new T.MeshStandardMaterial({
       color: def.col,
-      roughness: thin ? 0.7 : 0.55,
+      roughness: (wing || plane) ? 0.65 : 0.55,
       metalness: 0.0,
-      side: thin ? T.DoubleSide : T.FrontSide,
-      transparent: thin,
-      opacity: thin ? 0.82 : 1.0,
+      side: (wing || plane) ? T.DoubleSide : T.FrontSide,
+      transparent: plane,
+      opacity: plane ? 0.82 : 1.0,
     });
   }
 
@@ -150,6 +186,7 @@ export class CreatureBuilder {
       joint: opts.joint ?? this.jointType ?? def.joint,
       scale: opts.scale ?? 1,
       mirrorOf: opts.mirrorOf ?? null,
+      airfoil: def.airfoil ?? null,   // NACA params for the aero voxelizer
     };
     obj.userData.nodeId = node.id;
     this.nodes.set(node.id, node);

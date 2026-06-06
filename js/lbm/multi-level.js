@@ -192,7 +192,7 @@ export function nodesToParts(nodes, THREE) {
       center.set((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2);
       center.applyMatrix4(o.matrixWorld);
 
-      parts.push({
+      const part = {
         id: sub === 0 ? n.id : `${n.id}:${sub}`,
         parentId: n.parentId ?? null,
         position: [center.x, center.y, center.z],
@@ -200,7 +200,16 @@ export function nodesToParts(nodes, THREE) {
         axes,
         velocity: n.velocity ?? [0, 0, 0],
         type: n.type,
-      });
+      };
+      // Wings/fins carry a NACA section that voxelizes as a real airfoil
+      // (span = local X, normal = local Y, chord = local Z) instead of a slab.
+      if (n.airfoil) {
+        part.shape = 'airfoil';
+        part.camber = n.airfoil.m;
+        part.camberPos = n.airfoil.p;
+        part.thick = n.airfoil.t;
+      }
+      parts.push(part);
       sub++;
     });
   }

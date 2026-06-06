@@ -106,7 +106,7 @@ export class AeroController {
   static partsFromBuilder(builder, THREE) {
     if (!builder || !builder.nodes) return [];
     const nodes = [];
-    for (const n of builder.nodes.values()) nodes.push({ id: n.id, type: n.type, obj: n.obj, parentId: null });
+    for (const n of builder.nodes.values()) nodes.push({ id: n.id, type: n.type, obj: n.obj, parentId: null, airfoil: n.airfoil ?? null });
     return nodesToParts(nodes, THREE);
   }
 }

@@ -23,6 +23,8 @@
  *   (axis-aligned), which keeps older callers and tests working unchanged.
  */
 
+import { nacaCamber, nacaThickness } from './airfoil.js';
+
 export const FLUID = 0;
 export const SOLID = 1;
 
@@ -65,10 +67,15 @@ export function rasterizePart(mask, part, origin, dx) {
   const vel = part.velocity ?? [0, 0, 0];
   const c = part.position;
   const axes = part.axes ?? null;
-  // Padded half-extents along the part's local axes.
+  const airfoil = part.shape === 'airfoil' && axes;
+  // Padded half-extents along the part's local axes (the envelope for an airfoil).
   const h0 = Math.max(part.halfSize[0], dx);
   const h1 = Math.max(part.halfSize[1], dx);
   const h2 = Math.max(part.halfSize[2], dx);
+
+  // Airfoil section parameters (local: axis0=span, axis1=normal, axis2=chord).
+  const chord = airfoil ? part.halfSize[2] * 2 : 0;
+  const m = part.camber ?? 0, p = part.camberPos ?? 0.4, t = part.thick ?? 0.12;
 
   // World-space AABB of the (padded) OBB → the cell range to scan.
   const lo = [0, 0, 0], hi = [0, 0, 0];
@@ -88,7 +95,20 @@ export function rasterizePart(mask, part, origin, dx) {
         const pz = origin[2] + k * dx;
         // Inside test: project the cell node onto the part's local axes.
         let inside;
-        if (axes) {
+        if (airfoil) {
+          const ex = px - c[0], ey = py - c[1], ez = pz - c[2];
+          const s  = axes[0][0] * ex + axes[0][1] * ey + axes[0][2] * ez; // span
+          const nn = axes[1][0] * ex + axes[1][1] * ey + axes[1][2] * ez; // normal
+          const cc = axes[2][0] * ex + axes[2][1] * ey + axes[2][2] * ez; // chord
+          // Leading edge at +chord end; chord fraction 0 (LE) → 1 (TE).
+          const cFrac = (part.halfSize[2] - cc) / chord;
+          if (Math.abs(s) <= h0 && cFrac >= 0 && cFrac <= 1) {
+            const ycW = nacaCamber(cFrac, m, p) * chord;
+            const ytW = nacaThickness(cFrac, t) * chord;
+            // +½ cell of margin so thin leading/trailing edges stay watertight.
+            inside = Math.abs(nn - ycW) <= ytW + dx * 0.5;
+          } else inside = false;
+        } else if (axes) {
           const ex = px - c[0], ey = py - c[1], ez = pz - c[2];
           const q0 = axes[0][0] * ex + axes[0][1] * ey + axes[0][2] * ez;
           const q1 = axes[1][0] * ex + axes[1][1] * ey + axes[1][2] * ez;
