@@ -14,6 +14,8 @@ import { MATERIALS }        from './mpm.js';
 import { SimController }     from './sim-controller.js';
 import { ParticleRenderer }  from './rendering/particle-renderer.js';
 import { CreatureBuilder }   from './creature/builder.js';
+import { AeroController }     from './aero-controller.js';
+import { FlowRenderer }       from './rendering/flow-renderer.js';
 
 /* ── Loading-screen helpers ─────────────────────────────────────── */
 const stepsEl = document.getElementById('ld-steps');
@@ -145,9 +147,15 @@ async function main() {
     catch (e) { ldWarn(r, 'GUI failed: ' + e.message); }
   }
 
+  /* 12b ─ Creature aerodynamics (SIMULATE mode, additive) */
+  const aero = new AeroController();
+  let flowRenderer = null;
+  try { flowRenderer = new FlowRenderer(THREE, scene); flowRenderer.setVisible(false); }
+  catch (e) { console.warn('Flow renderer unavailable:', e.message); }
+
   /* 13 ─ Wire UI input */
   { const r = ldStep('Wiring UI events…');
-    try { wireUI(THREE, sim, cam, tapMesh, builder); ldOk(r); }
+    try { wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer); ldOk(r); }
     catch (e) { ldWarn(r, 'UI warning: ' + e.message); } }
 
   /* 14 ─ Start! */
@@ -169,6 +177,15 @@ async function main() {
 
     /* Main-thread fallback advances here; the worker advances itself. */
     if (!sim.isWorker) sim.stepLocal();
+
+    /* Creature aerodynamics (SIMULATE mode only). */
+    if (aero.active) {
+      if (!aero.isWorker) aero.stepLocal();
+      if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
+      const f = aero.force, mag = Math.hypot(f[0], f[1], f[2]);
+      const fEl = document.getElementById('hforce');
+      if (fEl) fEl.textContent = `${mag.toFixed(1)} N (lift ${f[1] >= 0 ? '+' : ''}${f[1].toFixed(1)})`;
+    }
 
     if (orbit) orbit.update();
 
@@ -313,9 +330,10 @@ function spawnRandom(sim, matId) {
 /* ══════════════════════════════════════════════════════════════════
    UI event wiring
    ══════════════════════════════════════════════════════════════════ */
-function wireUI(THREE, sim, cam, tapMesh, builder) {
+function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
+  let aeroSpeed = 8, flowOn = true;
 
   /* ── Mode tabs ─────────────────────────────────────────────── */
   document.querySelectorAll('.mbtn[data-mode]').forEach(b => {
@@ -330,10 +348,60 @@ function wireUI(THREE, sim, cam, tapMesh, builder) {
   function _switchMode(m) {
     const wp = document.getElementById('world-panel');
     const bp = document.getElementById('build-panel');
+    const sp = document.getElementById('sim-panel');
     if (wp) wp.style.display = (m === 'world') ? '' : 'none';
     if (bp) bp.style.display = (m === 'build') ? '' : 'none';
+    if (sp) sp.style.display = (m === 'simulate') ? '' : 'none';
     if (builder) { if (m === 'build') builder.enable(); else builder.disable(); }
+    if (m === 'simulate') _startAero(); else _stopAero();
   }
+
+  /* ── SIMULATE: spin up creature aerodynamics from the built creature ── */
+  function _startAero() {
+    if (!aero) return;
+    const parts = AeroController.partsFromBuilder(builder, THREE);
+    const info = document.getElementById('aero-info');
+    if (parts.length === 0) {
+      if (info) info.textContent = 'No creature — build one in BUILD mode first.';
+      return;
+    }
+    // The creature stays visible in SIMULATE so you can watch flow around it.
+    if (builder) builder.root.visible = true;
+    aero.start(parts).then((where) => {
+      aero.setVelocity([0, 0, aeroSpeed]);
+      const st = aero.stats;
+      if (info && st) {
+        info.innerHTML = `Running on <b>${where}</b> · ${st.totalCells.toLocaleString()} cells · ` +
+          st.levels.map(l => `${l.label} ${l.dims.join('×')}`).join(' / ') +
+          ` · ${st.solidCells} solid`;
+      }
+    }).catch((e) => { if (info) info.textContent = 'Aero failed: ' + e.message; });
+    const haero = document.getElementById('haero');
+    if (haero) haero.style.display = '';
+    if (flowRenderer) flowRenderer.setVisible(flowOn);
+  }
+
+  function _stopAero() {
+    if (aero) aero.stop();
+    if (flowRenderer) flowRenderer.setVisible(false);
+    const haero = document.getElementById('haero');
+    if (haero) haero.style.display = 'none';
+  }
+
+  /* SIMULATE panel controls */
+  const spdEl = document.getElementById('aero-speed');
+  spdEl?.addEventListener('input', e => {
+    aeroSpeed = +e.target.value;
+    document.getElementById('aero-spd-val').textContent = aeroSpeed;
+    if (aero?.active) aero.setVelocity([0, 0, aeroSpeed]);
+  });
+  const flowBtn = document.getElementById('btn-flow');
+  flowBtn?.addEventListener('click', () => {
+    flowOn = !flowOn;
+    flowBtn.classList.toggle('on', flowOn);
+    flowBtn.textContent = 'Flow lines: ' + (flowOn ? 'on' : 'off');
+    if (flowRenderer) flowRenderer.setVisible(flowOn && mode === 'simulate' && aero.active);
+  });
 
   /* ── Material selector ─────────────────────────────────────── */
   document.querySelectorAll('.mfbtn[data-m]').forEach(b => {

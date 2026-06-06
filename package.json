@@ -1,0 +1,10 @@
+{
+  "name": "fluidcreature",
+  "version": "0.1.0",
+  "description": "Browser fluid + creature simulator. Runtime uses CDN import maps (no install needed); this manifest only wires up the headless physics tests.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node test/run-all.mjs"
+  }
+}
