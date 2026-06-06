@@ -16,6 +16,7 @@ import { ParticleRenderer }  from './rendering/particle-renderer.js';
 import { CreatureBuilder }   from './creature/builder.js';
 import { AeroController }     from './aero-controller.js';
 import { FlowRenderer }       from './rendering/flow-renderer.js';
+import { FlightModel }        from './flight-model.js';
 
 /* ── Loading-screen helpers ─────────────────────────────────────── */
 const stepsEl = document.getElementById('ld-steps');
@@ -147,15 +148,16 @@ async function main() {
     catch (e) { ldWarn(r, 'GUI failed: ' + e.message); }
   }
 
-  /* 12b ─ Creature aerodynamics (SIMULATE mode, additive) */
+  /* 12b ─ Creature aerodynamics + free flight (SIMULATE mode, additive) */
   const aero = new AeroController();
+  const flight = new FlightModel();
   let flowRenderer = null;
   try { flowRenderer = new FlowRenderer(THREE, scene); flowRenderer.setVisible(false); }
   catch (e) { console.warn('Flow renderer unavailable:', e.message); }
 
   /* 13 ─ Wire UI input */
   { const r = ldStep('Wiring UI events…');
-    try { wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer); ldOk(r); }
+    try { wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit); ldOk(r); }
     catch (e) { ldWarn(r, 'UI warning: ' + e.message); } }
 
   /* 14 ─ Start! */
@@ -166,7 +168,7 @@ async function main() {
   /* ── Render loop ────────────────────────────────────────────── */
   const fpsEl = document.getElementById('hfps');
   const pcEl  = document.getElementById('hpc');
-  let _lastFpsT = 0, _fc = 0, _lastGrav = null, _lastSub = null;
+  let _lastFpsT = 0, _fc = 0, _lastGrav = null, _lastSub = null, _lastT = 0;
 
   function tick(t) {
     requestAnimationFrame(tick);
@@ -178,14 +180,31 @@ async function main() {
     /* Main-thread fallback advances here; the worker advances itself. */
     if (!sim.isWorker) sim.stepLocal();
 
-    /* Creature aerodynamics (SIMULATE mode only). */
+    /* Creature aerodynamics + free flight (SIMULATE mode only). */
     if (aero.active) {
       if (!aero.isWorker) aero.stepLocal();
       if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
       const f = aero.force;
-      // y = lift (up/down), z = drag/thrust (along flight axis). Show separately.
+
+      // Free flight: integrate lift vs weight → the creature climbs/sinks.
+      let dt = (t - _lastT) / 1000; _lastT = t;
+      if (!Number.isFinite(dt) || dt <= 0) dt = 1 / 60;
+      if (flight.enabled) {
+        const yPrev = flight.y;
+        flight.update(dt, f[1]);
+        const dY = flight.y - yPrev;
+        if (builder) builder.root.position.y = flight.y;       // move the creature
+        if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.y = flight.y;
+        if (orbit) orbit.target.y += dY;                        // camera follows the climb
+      }
+
       const fEl = document.getElementById('hforce');
-      if (fEl) fEl.textContent = `lift ${f[1].toFixed(1)} N  drag ${Math.abs(f[2]).toFixed(1)} N`;
+      if (fEl) {
+        const base = `lift ${f[1].toFixed(1)} N  drag ${Math.abs(f[2]).toFixed(1)} N`;
+        fEl.innerHTML = flight.enabled
+          ? `${base}<br>alt ${flight.y.toFixed(1)} m · ${flight.state()} · ${flight.mass}kg`
+          : base;
+      }
     }
 
     if (orbit) orbit.update();
@@ -331,10 +350,11 @@ function spawnRandom(sim, matId) {
 /* ══════════════════════════════════════════════════════════════════
    UI event wiring
    ══════════════════════════════════════════════════════════════════ */
-function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
+function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit) {
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
   let aeroSpeed = 8, flowOn = true, aoaDeg = 15;
+  let _orbitTargetY0 = orbit ? orbit.target.y : 0;
 
   /* ── Mode tabs ─────────────────────────────────────────────── */
   document.querySelectorAll('.mbtn[data-mode]').forEach(b => {
@@ -396,7 +416,11 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
       : { N_MAX: 32, N_MIN: 12, N_SUB: [3, 2, 1] };
 
     // The creature stays visible in SIMULATE so you can watch flow around it.
-    if (builder) builder.root.visible = true;
+    if (builder) { builder.root.visible = true; builder.root.position.y = 0; }
+    // Reset flight to the launch height each time we (re)enter the sim.
+    flight.reset();
+    if (orbit) { orbit.target.y = _orbitTargetY0; }
+    if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.y = 0;
     aero.start(parts, gridOpts).then((where) => {
       aero.setVelocity([0, 0, aeroSpeed]);
       const st = aero.stats;
@@ -414,7 +438,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
   function _stopAero() {
     if (aero) aero.stop();
     _restoreAoA();
-    if (flowRenderer) flowRenderer.setVisible(false);
+    flight.reset();
+    if (builder) builder.root.position.y = 0;
+    if (orbit) orbit.target.y = _orbitTargetY0;
+    if (flowRenderer) { flowRenderer.setVisible(false); if (flowRenderer.obj) flowRenderer.obj.position.y = 0; }
     const haero = document.getElementById('haero');
     if (haero) haero.style.display = 'none';
   }
@@ -448,6 +475,27 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
 
   document.getElementById('btn-restart-aero')?.addEventListener('click', () => {
     if (mode === 'simulate') { _stopAero(); _startAero(); }
+  });
+
+  /* Free flight: mass slider + on/off toggle. */
+  const massEl = document.getElementById('aero-mass');
+  massEl?.addEventListener('input', e => {
+    flight.mass = +e.target.value;
+    document.getElementById('aero-mass-val').textContent = flight.mass;
+  });
+  if (massEl) flight.mass = +massEl.value;
+  const flyBtn = document.getElementById('btn-fly');
+  flyBtn?.addEventListener('click', () => {
+    flight.enabled = !flight.enabled;
+    flyBtn.classList.toggle('on', flight.enabled);
+    flyBtn.textContent = 'Free flight: ' + (flight.enabled ? 'on' : 'off');
+    if (!flight.enabled) {
+      // Park back at launch height when switching to wind-tunnel mode.
+      flight.reset();
+      if (builder) builder.root.position.y = 0;
+      if (orbit) orbit.target.y = _orbitTargetY0;
+      if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.y = 0;
+    }
   });
 
   /* ── Material selector ─────────────────────────────────────── */
