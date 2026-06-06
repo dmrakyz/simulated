@@ -334,7 +334,7 @@ function spawnRandom(sim, matId) {
 function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
-  let aeroSpeed = 8, flowOn = true;
+  let aeroSpeed = 8, flowOn = true, aoaDeg = 15;
 
   /* ── Mode tabs ─────────────────────────────────────────────── */
   document.querySelectorAll('.mbtn[data-mode]').forEach(b => {
@@ -360,7 +360,7 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
   /* ── SIMULATE: spin up creature aerodynamics from the built creature ── */
   function _startAero() {
     if (!aero) return;
-    const parts = AeroController.partsFromBuilder(builder, THREE);
+    const parts = AeroController.partsFromBuilder(builder, THREE, aoaDeg);
     const info = document.getElementById('aero-info');
     if (parts.length === 0) {
       if (info) info.textContent = 'No creature — build one in BUILD mode first.';
@@ -408,6 +408,20 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
     flowBtn.classList.toggle('on', flowOn);
     flowBtn.textContent = 'Flow lines: ' + (flowOn ? 'on' : 'off');
     if (flowRenderer) flowRenderer.setVisible(flowOn && mode === 'simulate' && aero.active);
+  });
+
+  const aoaEl = document.getElementById('aero-aoa');
+  aoaEl?.addEventListener('input', e => {
+    aoaDeg = +e.target.value;
+    document.getElementById('aero-aoa-val').textContent = aoaDeg;
+    if (aero?.active && builder) {
+      // Rebuild solid mask with new AoA — flow state continues without full restart.
+      aero.setParts(AeroController.partsFromBuilder(builder, THREE, aoaDeg));
+    }
+  });
+
+  document.getElementById('btn-restart-aero')?.addEventListener('click', () => {
+    if (mode === 'simulate') { _stopAero(); _startAero(); }
   });
 
   /* ── Material selector ─────────────────────────────────────── */
@@ -487,6 +501,9 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer) {
   const ray = new THREE.Raycaster(), rv2 = new THREE.Vector2();
   let ptrDn = null;
   const canvas = document.getElementById('c');
+
+  // Prevent right-click / long-press context menu on the canvas.
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
 
   canvas.addEventListener('pointerdown', e => { ptrDn = [e.clientX, e.clientY]; });
   canvas.addEventListener('pointerup', e => {

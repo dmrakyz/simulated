@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
@@ -145,13 +145,23 @@
     <div id="sim-panel" style="display:none">
       <div class="ptitle">Aerodynamics</div>
       <div style="font-size:10px;color:rgba(255,255,255,.5);line-height:1.7">
-        Your creature is dropped into a wind field built to fit its shape.<br>
-        Air flows past in the creature's frame; wings &amp; fins develop lift and drag.
+        Your creature flies in place — air flows past in the creature's frame
+        so wings and fins develop real lift and drag.
       </div>
+
       <div class="ptitle" style="margin-top:14px">Forward speed: <span id="aero-spd-val">8</span> m/s</div>
       <input type="range" id="aero-speed" min="0" max="40" step="1" value="8">
+
+      <div class="ptitle" style="margin-top:14px">Wing angle of attack: <span id="aero-aoa-val">15</span>°</div>
+      <input type="range" id="aero-aoa" min="-30" max="30" step="1" value="15">
+      <div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:4px;line-height:1.5">
+        Tilts wings into the flow — positive values give upward lift.<br>
+        Updates live without restarting.
+      </div>
+
       <div class="cbtn-row" style="margin-top:14px">
         <button class="cbtn on" id="btn-flow">Flow lines: on</button>
+        <button class="cbtn" id="btn-restart-aero">Restart</button>
       </div>
       <div id="aero-info" style="font-size:10px;color:rgba(255,255,255,.45);margin-top:12px">No creature — build one in BUILD mode first.</div>
     </div>
