@@ -123,5 +123,36 @@ console.log('\n[force] perturbation method vs total-momentum');
   console.log(`    totalMomentum_x=${total[0].toFixed(1)}  perturbation_x=${perturb[0].toExponential(2)}`);
 }
 
+/* ── MEM force gives a physically sane drag coefficient ───────────── */
+console.log('\n[accuracy] momentum-exchange drag coefficient is order-1');
+{
+  // A flat plate perpendicular to the flow is a bluff body with a well-known
+  // drag coefficient Cd ≈ 1.1–2.0. If MEM is right, the measured Cd lands there;
+  // a 30× error (the old bulk-momentum bug) would show Cd ≈ 30+.
+  // Keep the plate small vs the cross-section (~12% blockage) so we recover the
+  // free-air drag coefficient rather than a blockage-inflated one.
+  const dims = [40, 56, 28];
+  const lvl = new LbmLevel(dims, 0.05, { tau: 0.6 });
+  const mask = allocMask(dims);
+  const U = 0.08; // lattice free-stream along +x
+  const ph = 12, pz = 12, j0 = 22, k0 = 8;
+  for (let j = j0; j < j0 + ph; j++)
+    for (let k = k0; k < k0 + pz; k++) {
+      const f = flatIdx(18, j, k, dims);
+      mask.solid[f] = SOLID; mask.count++;
+    }
+  let fxSum = 0, samples = 0;
+  for (let s = 0; s < 1000; s++) {
+    lvl.step([U, 0, 0], mask);
+    if (s > 700) { fxSum += lvl.forceLattice[0]; samples++; }
+  }
+  const Fx = fxSum / samples;
+  const area = ph * pz;             // frontal area in cells²
+  const Cd = (2 * Math.abs(Fx)) / (1.0 * area * U * U); // rho_lat = 1
+  check('drag points downstream (+x, same sign as flow)', Fx > 0, `Fx=${Fx.toExponential(2)}`);
+  check('drag coefficient is order-1 (0.5 < Cd < 4)', Cd > 0.5 && Cd < 4, `Cd=${Cd.toFixed(2)}`);
+  console.log(`    flat-plate Cd ≈ ${Cd.toFixed(2)} (textbook ≈ 1.1–2.0)`);
+}
+
 console.log(`\n${failed === 0 ? '✓ ALL PASS' : '✗ FAILURES'} — ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

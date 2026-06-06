@@ -34,19 +34,28 @@ const TARGET_MS  = 1000 / TARGET_HZ;
 const THROTTLE_THRESHOLD_MS = 40;
 const THROTTLE_MIN_SUB = 2;
 
+let _flowSmooth = null; // persistent EMA buffer so streamlines don't flicker.
+
 function buildFlowSnapshot() {
   // Downsample the FAG velocity field to a coarse arrow grid (cap ~8³ samples).
   const fag = sim.fag;
   const [nx, ny, nz] = fag.dims;
   const step = Math.max(1, Math.floor(Math.max(nx, ny, nz) / 8));
   const sx = Math.ceil(nx / step), sy = Math.ceil(ny / step), sz = Math.ceil(nz / step);
-  const vec = new Float32Array(sx * sy * sz * 3);
+  const n3 = sx * sy * sz * 3;
+  if (!_flowSmooth || _flowSmooth.length !== n3) _flowSmooth = new Float32Array(n3);
+  const vec = new Float32Array(n3);
+  const a = 0.2; // EMA weight: smooth but still responsive.
   let o = 0;
   for (let i = 0; i < nx; i += step) {
     for (let j = 0; j < ny; j += step) {
       for (let k = 0; k < nz; k += step) {
         const c = fag.idx(i, j, k);
-        vec[o++] = fag.ux[c]; vec[o++] = fag.uy[c]; vec[o++] = fag.uz[c];
+        _flowSmooth[o]     = (1 - a) * _flowSmooth[o]     + a * fag.ux[c];
+        _flowSmooth[o + 1] = (1 - a) * _flowSmooth[o + 1] + a * fag.uy[c];
+        _flowSmooth[o + 2] = (1 - a) * _flowSmooth[o + 2] + a * fag.uz[c];
+        vec[o] = _flowSmooth[o]; vec[o + 1] = _flowSmooth[o + 1]; vec[o + 2] = _flowSmooth[o + 2];
+        o += 3;
       }
     }
   }

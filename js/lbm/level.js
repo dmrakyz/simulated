@@ -60,6 +60,8 @@ export class LbmLevel {
     this.uz = new Float32Array(this.n);
     // Toroidal world offset (cells), updated as the creature moves.
     this.origin = opts.origin ? opts.origin.slice() : [0, 0, 0];
+    // Per-step momentum-exchange force on the body (lattice units).
+    this.forceLattice = [0, 0, 0];
     this.initEquilibrium(RHO0, [0, 0, 0]);
   }
 
@@ -115,6 +117,11 @@ export class LbmLevel {
     }
 
     // 2 — Streaming (pull) with bounce-back at solids and inlet on faces.
+    //     We accumulate the hydrodynamic force on the body here via the
+    //     momentum-exchange method (Mei/Ladd): every fluid→solid link
+    //     contributes e·(f_in + f_bounced). This is a surface integral, so it
+    //     is accurate and far less noisy than summing bulk fluid momentum.
+    let Fx = 0, Fy = 0, Fz = 0;
     const iusqr = 1.5 * (inletVel[0] ** 2 + inletVel[1] ** 2 + inletVel[2] ** 2);
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
@@ -137,10 +144,17 @@ export class LbmLevel {
               // from the solid is replaced by this cell's own opposite
               // population, plus a momentum term from the wall's velocity.
               const op = OPP[q];
+              const fIn = f[c * Q + op];   // post-collision pop heading into the wall
               const uw = wallVel
                 ? (C[q][0] * wallVel[sc * 3] + C[q][1] * wallVel[sc * 3 + 1] + C[q][2] * wallVel[sc * 3 + 2])
                 : 0;
-              f2[b + q] = f[c * Q + op] + 6 * W[q] * RHO0 * uw;
+              const bounced = fIn + 6 * W[q] * RHO0 * uw;
+              f2[b + q] = bounced;
+              // The link from c toward the solid points along c_op; accumulate
+              // momentum exchanged across it. Force on the body is +e·(f_in+f_back).
+              Fx += C[op][0] * (fIn + bounced);
+              Fy += C[op][1] * (fIn + bounced);
+              Fz += C[op][2] * (fIn + bounced);
             } else {
               f2[b + q] = f[sc * Q + q];
             }
@@ -148,6 +162,7 @@ export class LbmLevel {
         }
       }
     }
+    this.forceLattice = [Fx, Fy, Fz];
 
     // Swap buffers.
     const tmp = this.f; this.f = this.f2; this.f2 = tmp;

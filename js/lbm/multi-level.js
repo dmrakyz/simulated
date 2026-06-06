@@ -57,6 +57,9 @@ export class MultiLevelLBM {
     // Smoothed Galilean far-field velocity (m/s) to suppress acoustic ringing.
     this.uSmooth = [0, 0, 0];
     this.vCreature = [0, 0, 0];
+    // EMA-smoothed body force (lattice units) — kills frame-to-frame jitter in
+    // the displayed lift/drag without lagging perceptibly.
+    this.forceEMA = [0, 0, 0];
   }
 
   /** Rebuild the fine-grid solid mask from the current articulated pose. */
@@ -94,28 +97,35 @@ export class MultiLevelLBM {
       if (mag > cap) { const s = cap / mag; inlet[0] *= s; inlet[1] *= s; inlet[2] *= s; }
 
       const mask = lv === 0 ? this.mask : null;
+      let fx = 0, fy = 0, fz = 0;
       for (let s = 0; s < level.nSub; s++) {
         if (level.stepGPU) level.stepGPU(inlet, mask);
         else level.step(inlet, mask);
+        if (lv === 0) { fx += level.forceLattice[0]; fy += level.forceLattice[1]; fz += level.forceLattice[2]; }
+      }
+      // Average the fine-level force over its substeps, then EMA across frames.
+      if (lv === 0 && level.nSub > 0) {
+        const inv = 1 / level.nSub, a = 0.15;
+        this.forceEMA[0] = (1 - a) * this.forceEMA[0] + a * fx * inv;
+        this.forceEMA[1] = (1 - a) * this.forceEMA[1] + a * fy * inv;
+        this.forceEMA[2] = (1 - a) * this.forceEMA[2] + a * fz * inv;
       }
     }
   }
 
   /**
-   * Net aerodynamic force on the creature (N).
+   * Net aerodynamic force on the creature (N), via the momentum-exchange method
+   * (a surface integral at the body), EMA-smoothed across frames.
    *
-   * Uses the perturbation method: total fluid momentum minus background flow.
-   * This isolates the creature's pressure signature from the uninformative
-   * bulk-flow term that dominated the previous total-momentum calculation.
+   * Lattice→physical force conversion: a lattice force has units of
+   * (Δm·Δx/Δt²). With Δm = ρ_air·Δx³ and the level's physical Δt:
+   *   F_phys = F_lattice · ρ_air · Δx⁴ / Δt²
    */
   netForce(rhoAir = 1.225) {
-    // Current smoothed lattice inlet (background flow to subtract).
-    const inletLatt = this.toLatticeVel(this.fag, this.uSmooth);
-    const m = this.fag.aerodynamicForce(inletLatt);
+    const dx = this.fag.dx;
     const { dt } = this.fag.sound;
-    const k = (rhoAir * Math.pow(this.fag.dx, 3)) / dt;
-    // Sign: positive perturbation = fluid being pushed; reaction force on body is opposite.
-    return [-m[0] * k, -m[1] * k, -m[2] * k];
+    const k = (rhoAir * dx * dx * dx * dx) / (dt * dt);
+    return [this.forceEMA[0] * k, this.forceEMA[1] * k, this.forceEMA[2] * k];
   }
 
   /** Compact stats for HUD / debugging. */
