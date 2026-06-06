@@ -370,6 +370,31 @@ export class CreatureBuilder {
     this._emit();
   }
 
+  /** Get a copy of the selected node's airfoil params, or null if not a wing/fin. */
+  getSelectedAirfoil() {
+    const n = this.selected;
+    return n?.airfoil ? { ...n.airfoil } : null;
+  }
+
+  /** Update one NACA param for the selected node and rebuild its mesh geometry. */
+  updateSelectedAirfoil(key, value) {
+    const n = this.selected;
+    if (!n || !n.airfoil) return;
+    n.airfoil[key] = value;
+    const def = PART_TYPES[n.type];
+    const newGeo = this._airfoilGeometry(def.size[0], def.size[1], n.airfoil);
+    if (n.obj.isMesh) { n.obj.geometry.dispose(); n.obj.geometry = newGeo; }
+    // Keep mirror twin in sync.
+    if (n.mirrorId) {
+      const twin = this.nodes.get(n.mirrorId);
+      if (twin && twin.obj.isMesh) {
+        twin.airfoil[key] = value;
+        twin.obj.geometry.dispose();
+        twin.obj.geometry = this._airfoilGeometry(def.size[0], def.size[1], twin.airfoil);
+      }
+    }
+  }
+
   /* ── Save / load ───────────────────────────────────────────── */
   save() {
     const data = [];
@@ -459,6 +484,20 @@ export class CreatureBuilder {
       </div>
 
       <div id="sel-info">None selected (0 parts)</div>
+
+      <!-- Wing / Fin shape sliders: only visible when a WING or FIN is selected -->
+      <div id="wing-shape-panel" style="display:none">
+        <div class="ptitle" style="margin-top:14px">Wing Shape</div>
+        <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:2px">Camber: <span id="wng-cam-val">4.0</span>%</div>
+        <input type="range" id="wng-cam" min="0" max="8" step="0.5" value="4">
+        <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:4px">Thickness: <span id="wng-thk-val">12</span>%</div>
+        <input type="range" id="wng-thk" min="4" max="20" step="1" value="12">
+        <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:4px">Camber position: <span id="wng-cp-val">40</span>%</div>
+        <input type="range" id="wng-cp" min="20" max="60" step="5" value="40">
+        <div style="font-size:10px;color:rgba(255,255,255,.3);margin-top:4px;line-height:1.5">
+          Higher camber = more lift at low speed.<br>Thicker = stronger but more drag.
+        </div>
+      </div>
     `;
   }
 }

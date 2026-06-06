@@ -1,55 +1,60 @@
 /**
- * flight-model.js — turns the aerodynamic force from the LBM into actual
- * motion, so the creature flies instead of hanging in a wind tunnel.
- *
- * Kept deliberately simple and stable: a 1-DOF vertical model. The user sets
- * forward speed (throttle) and angle of attack; those determine the lift the
- * LBM measures; this model integrates lift vs weight to make the creature
- * climb, glide, stall-and-sink, or settle into level flight. Forward and
- * lateral motion are left to the throttle/steering so the creature stays in
- * frame and the model can't diverge.
+ * flight-model.js — vertical + forward flight integrator.
  *
  * Vertical dynamics (semi-implicit Euler):
- *   a = (lift − weight) / m  −  c·v_y      (linear damping tames oscillation)
- * Ground contact clamps at the launch height. Pure data — unit-tested.
+ *   a_y = (lift − weight) / m  −  damp·v_y
+ * Ground contact clamps altitude at the launch height. Forward speed (vForward)
+ * is caller-supplied throttle; no forward drag is integrated here.
+ *
+ * Backward-compatible: tests that only pass two args to update() continue to
+ * work; x and z start at 0 unless setLaunch() is called first.
  */
 
 export class FlightModel {
   constructor(opts = {}) {
-    this.mass = opts.mass ?? 4;      // kg
-    this.g = opts.g ?? 9.8;          // m/s²
-    this.damp = opts.damp ?? 0.8;    // 1/s vertical velocity damping
-    this.maxRate = opts.maxRate ?? 12; // clamp |v_y| (m/s) so it never bolts
+    this.mass    = opts.mass    ?? 4;      // kg
+    this.g       = opts.g       ?? 9.8;    // m/s²
+    this.damp    = opts.damp    ?? 0.8;    // 1/s vertical-velocity damping
+    this.maxRate = opts.maxRate ?? 12;     // m/s |v_y| cap
     this.enabled = true;
+    this._lx = 0; this._ly = 0; this._lz = 0;   // launch position
     this.reset();
   }
 
-  reset() { this.y = 0; this.vy = 0; }   // y = altitude above launch (m)
+  /** Pin the launch position; reset() returns the creature here. */
+  setLaunch(x, y, z) {
+    this._lx = x; this._ly = y; this._lz = z;
+    this.x = x; this.y = y; this.z = z;
+    this.vy = 0;
+  }
+
+  reset() { this.x = this._lx; this.y = this._ly; this.z = this._lz; this.vy = 0; }
 
   weight() { return this.mass * this.g; }
 
   /**
-   * Advance the vertical state by dt seconds given the current lift (N, +up).
-   * Returns the new altitude. Clamps to the launch floor (y ≥ 0).
+   * Advance by dt seconds. liftN (N, +up) drives vertical; vForward (m/s)
+   * advances z. Clamps dt to 0.1 s for stability after long frames.
+   * Returns new altitude (y).
    */
-  update(dt, liftN) {
+  update(dt, liftN, vForward = 0) {
     if (!this.enabled) return this.y;
-    // Sub-step for stability if a frame is long (e.g. tab refocus).
-    let t = Math.min(dt, 0.1);
+    const t = Math.min(dt, 0.1);
     const a = (liftN - this.weight()) / this.mass;
     this.vy += a * t;
     this.vy -= this.damp * this.vy * t;
-    if (this.vy > this.maxRate) this.vy = this.maxRate;
+    if (this.vy >  this.maxRate) this.vy =  this.maxRate;
     if (this.vy < -this.maxRate) this.vy = -this.maxRate;
     this.y += this.vy * t;
-    if (this.y <= 0 && this.vy < 0) { this.y = 0; this.vy = 0; } // on the ground
+    this.z += vForward * t;
+    if (this.y <= this._ly && this.vy < 0) { this.y = this._ly; this.vy = 0; }
     return this.y;
   }
 
-  /** A coarse label for the HUD. */
+  /** Coarse label for the HUD. */
   state() {
-    if (this.y <= 0.001 && this.vy <= 0) return 'grounded';
-    if (this.vy > 0.2) return 'climbing';
+    if (this.y <= this._ly + 0.001 && this.vy <= 0) return 'grounded';
+    if (this.vy >  0.2) return 'climbing';
     if (this.vy < -0.2) return 'sinking';
     return 'level';
   }

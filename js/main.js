@@ -177,6 +177,11 @@ async function main() {
     const sb = Math.round(simP.substeps);
     if (sb !== _lastSub) { sim.setSubsteps(sb); _lastSub = sb; }
 
+    // dt always advances so the first aero frame doesn't inherit elapsed load time.
+    let dt = (t - _lastT) / 1000; _lastT = t;
+    if (!Number.isFinite(dt) || dt <= 0) dt = 1 / 60;
+    dt = Math.min(dt, 0.1);   // cap for tab-refocus long frames
+
     /* Main-thread fallback advances here; the worker advances itself. */
     if (!sim.isWorker) sim.stepLocal();
 
@@ -186,16 +191,13 @@ async function main() {
       if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
       const f = aero.force;
 
-      // Free flight: integrate lift vs weight → the creature climbs/sinks.
-      let dt = (t - _lastT) / 1000; _lastT = t;
-      if (!Number.isFinite(dt) || dt <= 0) dt = 1 / 60;
+      // Free flight: integrate lift vs weight (vertical) + advance forward (z).
+      // aero._vel[2] is the current forward speed set by the UI slider.
       if (flight.enabled) {
-        const yPrev = flight.y;
-        flight.update(dt, f[1]);
-        const dY = flight.y - yPrev;
-        if (builder) builder.root.position.y = flight.y;       // move the creature
-        if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.y = flight.y;
-        if (orbit) orbit.target.y += dY;                        // camera follows the climb
+        flight.update(dt, f[1], aero._vel[2]);
+        if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
+        if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
+        if (orbit) orbit.target.set(flight.x, flight.y, flight.z);
       }
 
       const fEl = document.getElementById('hforce');
@@ -354,7 +356,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
   let aeroSpeed = 8, flowOn = true, aoaDeg = 15;
-  let _orbitTargetY0 = orbit ? orbit.target.y : 0;
+  // World-view camera position saved so SIMULATE mode can restore it on exit.
+  const _worldOrbitTarget = orbit
+    ? { x: orbit.target.x, y: orbit.target.y, z: orbit.target.z }
+    : { x: DOM / 2, y: 1, z: DOM / 2 };
 
   /* ── Mode tabs ─────────────────────────────────────────────── */
   document.querySelectorAll('.mbtn[data-mode]').forEach(b => {
@@ -409,18 +414,21 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
       if (info) info.textContent = 'No creature — build one in BUILD mode first.';
       return;
     }
-    // Size the grid to the device: mobile gets half the cell count.
-    // N_MAX=32 → at most 32 cells on the longest axis; phone CPUs handle this comfortably.
+    // Boost resolution near wing surfaces: winged creatures need finer cells to
+    // resolve the boundary layer and produce accurate lift at the chord surface.
+    const hasWings = parts.some(p => p.type === 'WING' || p.type === 'FIN');
     const gridOpts = _isDesk
-      ? { N_MAX: 64, N_SUB: [5, 3, 2] }
-      : { N_MAX: 32, N_MIN: 12, N_SUB: [3, 2, 1] };
+      ? { N_MAX: hasWings ? 80 : 64, N_SUB: [5, 3, 2] }
+      : { N_MAX: hasWings ? 40 : 32, N_MIN: 12, N_SUB: [3, 2, 1] };
 
-    // The creature stays visible in SIMULATE so you can watch flow around it.
-    if (builder) { builder.root.visible = true; builder.root.position.y = 0; }
-    // Reset flight to the launch height each time we (re)enter the sim.
-    flight.reset();
-    if (orbit) { orbit.target.y = _orbitTargetY0; }
-    if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.y = 0;
+    // Lock the launch position at the creature's current built X/Z, ground level.
+    const lx = builder?.root.position.x ?? DOM / 2;
+    const lz = builder?.root.position.z ?? DOM / 2;
+    flight.setLaunch(lx, 0, lz);
+    if (builder) { builder.root.visible = true; builder.root.position.set(lx, 0, lz); }
+    if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(lx, 0, lz);
+    if (orbit) orbit.target.set(lx, 0, lz);   // camera watches the launch point
+
     aero.start(parts, gridOpts).then((where) => {
       aero.setVelocity([0, 0, aeroSpeed]);
       const st = aero.stats;
@@ -436,12 +444,17 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   }
 
   function _stopAero() {
+    const wasActive = aero?.active ?? false;
     if (aero) aero.stop();
     _restoreAoA();
-    flight.reset();
-    if (builder) builder.root.position.y = 0;
-    if (orbit) orbit.target.y = _orbitTargetY0;
-    if (flowRenderer) { flowRenderer.setVisible(false); if (flowRenderer.obj) flowRenderer.obj.position.y = 0; }
+    flight.reset();                // returns creature to launch position
+    if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
+    if (flowRenderer) {
+      flowRenderer.setVisible(false);
+      if (flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
+    }
+    // Only snap the camera back to the world view when leaving an active sim.
+    if (wasActive && orbit) orbit.target.set(_worldOrbitTarget.x, _worldOrbitTarget.y, _worldOrbitTarget.z);
     const haero = document.getElementById('haero');
     if (haero) haero.style.display = 'none';
   }
@@ -490,11 +503,11 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     flyBtn.classList.toggle('on', flight.enabled);
     flyBtn.textContent = 'Free flight: ' + (flight.enabled ? 'on' : 'off');
     if (!flight.enabled) {
-      // Park back at launch height when switching to wind-tunnel mode.
+      // Park back at launch position for wind-tunnel mode.
       flight.reset();
-      if (builder) builder.root.position.y = 0;
-      if (orbit) orbit.target.y = _orbitTargetY0;
-      if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.y = 0;
+      if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
+      if (orbit) orbit.target.set(flight.x, flight.y, flight.z);
+      if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
     }
   });
 
@@ -550,7 +563,24 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     builder?.scaleSelected(+e.target.value);
   });
 
-  /* Selected-part info readout */
+  /* Wing shape sliders — only visible when a WING or FIN is selected. */
+  document.getElementById('wng-cam')?.addEventListener('input', e => {
+    const v = +e.target.value / 100;
+    document.getElementById('wng-cam-val').textContent = (+e.target.value).toFixed(1);
+    builder?.updateSelectedAirfoil('m', v);
+  });
+  document.getElementById('wng-thk')?.addEventListener('input', e => {
+    const v = +e.target.value / 100;
+    document.getElementById('wng-thk-val').textContent = e.target.value;
+    builder?.updateSelectedAirfoil('t', v);
+  });
+  document.getElementById('wng-cp')?.addEventListener('input', e => {
+    const v = +e.target.value / 100;
+    document.getElementById('wng-cp-val').textContent = e.target.value;
+    builder?.updateSelectedAirfoil('p', v);
+  });
+
+  /* Selected-part info readout + wing-shape panel show/hide. */
   document.getElementById('c').addEventListener('creature-change', (e) => {
     const info = document.getElementById('sel-info');
     if (!info) return;
@@ -558,6 +588,26 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     info.textContent = s
       ? `${PART_LABEL(s.type)} · joint: ${s.joint} · scale ${s.scale.toFixed(1)}×  (${e.detail.parts} parts)`
       : `None selected  (${e.detail.parts} parts)`;
+
+    // Show wing shape panel when a WING or FIN is selected; populate with its params.
+    const wingPanel = document.getElementById('wing-shape-panel');
+    if (!wingPanel) return;
+    const isWing = s && (s.type === 'WING' || s.type === 'FIN');
+    wingPanel.style.display = isWing ? '' : 'none';
+    if (isWing) {
+      const af = builder?.getSelectedAirfoil();
+      if (af) {
+        const camPct = (af.m * 100).toFixed(1);
+        const thkPct = Math.round(af.t * 100);
+        const cpPct  = Math.round(af.p * 100);
+        const camEl = document.getElementById('wng-cam');
+        const thkEl = document.getElementById('wng-thk');
+        const cpEl  = document.getElementById('wng-cp');
+        if (camEl) { camEl.value = camPct; document.getElementById('wng-cam-val').textContent = camPct; }
+        if (thkEl) { thkEl.value = thkPct; document.getElementById('wng-thk-val').textContent = thkPct; }
+        if (cpEl)  { cpEl.value  = cpPct;  document.getElementById('wng-cp-val').textContent  = cpPct; }
+      }
+    }
   });
 
   /* ── Panel toggles ─────────────────────────────────────────── */
