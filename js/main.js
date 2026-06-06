@@ -191,13 +191,24 @@ async function main() {
       if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
       const f = aero.force;
 
-      // Free flight: integrate lift vs weight (vertical) + advance forward (z).
-      // aero._vel[2] is the current forward speed set by the UI slider.
+      // Free flight: integrate the full aero force + gravity on all axes, then
+      // feed the resulting velocity back into the solver so the creature feels
+      // its own motion (e.g. the upward wind of a fall). Throttle holds airspeed.
       if (flight.enabled) {
-        flight.update(dt, f[1], aero._vel[2]);
+        const px = flight.x, py = flight.y, pz = flight.z;   // pre-step position
+        flight.update(dt, f, flight.throttle);
+        aero.setVelocity(flight.velocity());                 // close the loop
         if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
         if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
-        if (orbit) orbit.target.set(flight.x, flight.y, flight.z);
+        // Chase camera: translate the orbit target AND the eye by the same
+        // delta, so the creature stays framed without the camera lagging behind
+        // or spinning to track a receding point. User orbit/zoom still works.
+        if (orbit) {
+          cam.position.x += flight.x - px;
+          cam.position.y += flight.y - py;
+          cam.position.z += flight.z - pz;
+          orbit.target.set(flight.x, flight.y, flight.z);
+        }
       }
 
       const fEl = document.getElementById('hforce');
@@ -356,10 +367,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
   let aeroSpeed = 8, flowOn = true, aoaDeg = 15;
-  // World-view camera position saved so SIMULATE mode can restore it on exit.
-  const _worldOrbitTarget = orbit
-    ? { x: orbit.target.x, y: orbit.target.y, z: orbit.target.z }
-    : { x: DOM / 2, y: 1, z: DOM / 2 };
+  // Camera state captured when entering SIMULATE, restored when leaving — the
+  // chase camera moves the eye during flight, so both eye and target must be
+  // put back or you'd return to WORLD staring in from wherever the bird ended up.
+  let _savedCam = null;
 
   /* ── Mode tabs ─────────────────────────────────────────────── */
   document.querySelectorAll('.mbtn[data-mode]').forEach(b => {
@@ -421,16 +432,22 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
       ? { N_MAX: hasWings ? 80 : 64, N_SUB: [5, 3, 2] }
       : { N_MAX: hasWings ? 40 : 32, N_MIN: 12, N_SUB: [3, 2, 1] };
 
+    // Remember where the WORLD/BUILD camera was so we can return to it on exit.
+    if (orbit) _savedCam = {
+      px: cam.position.x, py: cam.position.y, pz: cam.position.z,
+      tx: orbit.target.x, ty: orbit.target.y, tz: orbit.target.z,
+    };
     // Lock the launch position at the creature's current built X/Z, ground level.
     const lx = builder?.root.position.x ?? DOM / 2;
     const lz = builder?.root.position.z ?? DOM / 2;
-    flight.setLaunch(lx, 0, lz);
+    flight.throttle = aeroSpeed;
+    flight.setLaunch(lx, 0, lz);   // also seeds vz = throttle
     if (builder) { builder.root.visible = true; builder.root.position.set(lx, 0, lz); }
     if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(lx, 0, lz);
     if (orbit) orbit.target.set(lx, 0, lz);   // camera watches the launch point
 
     aero.start(parts, gridOpts).then((where) => {
-      aero.setVelocity([0, 0, aeroSpeed]);
+      aero.setVelocity(flight.enabled ? flight.velocity() : [0, 0, aeroSpeed]);
       const st = aero.stats;
       if (info && st) {
         info.innerHTML = `Running on <b>${where}</b> · ${st.totalCells.toLocaleString()} cells · ` +
@@ -453,8 +470,12 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
       flowRenderer.setVisible(false);
       if (flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
     }
-    // Only snap the camera back to the world view when leaving an active sim.
-    if (wasActive && orbit) orbit.target.set(_worldOrbitTarget.x, _worldOrbitTarget.y, _worldOrbitTarget.z);
+    // Restore the pre-sim camera (eye + target) only when leaving an active sim.
+    if (wasActive && orbit && _savedCam) {
+      cam.position.set(_savedCam.px, _savedCam.py, _savedCam.pz);
+      orbit.target.set(_savedCam.tx, _savedCam.ty, _savedCam.tz);
+      _savedCam = null;
+    }
     const haero = document.getElementById('haero');
     if (haero) haero.style.display = 'none';
   }
@@ -464,7 +485,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   spdEl?.addEventListener('input', e => {
     aeroSpeed = +e.target.value;
     document.getElementById('aero-spd-val').textContent = aeroSpeed;
-    if (aero?.active) aero.setVelocity([0, 0, aeroSpeed]);
+    flight.throttle = aeroSpeed;
+    // In free flight the tick loop drives the solver from the creature's true
+    // velocity; only set the inlet directly in fixed wind-tunnel mode.
+    if (aero?.active && !flight.enabled) aero.setVelocity([0, 0, aeroSpeed]);
   });
   const flowBtn = document.getElementById('btn-flow');
   flowBtn?.addEventListener('click', () => {
@@ -503,11 +527,20 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     flyBtn.classList.toggle('on', flight.enabled);
     flyBtn.textContent = 'Free flight: ' + (flight.enabled ? 'on' : 'off');
     if (!flight.enabled) {
-      // Park back at launch position for wind-tunnel mode.
+      // Park back at launch position for wind-tunnel mode; the solver inlet
+      // reverts to a fixed forward stream.
       flight.reset();
       if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
-      if (orbit) orbit.target.set(flight.x, flight.y, flight.z);
       if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
+      if (aero?.active) aero.setVelocity([0, 0, aeroSpeed]);
+      // Re-frame the parked creature from the saved pre-sim eye position.
+      if (orbit) {
+        if (_savedCam) cam.position.set(_savedCam.px, _savedCam.py, _savedCam.pz);
+        orbit.target.set(flight.x, flight.y, flight.z);
+      }
+    } else if (aero?.active) {
+      // Re-enabling: hand the solver back the creature's live velocity.
+      aero.setVelocity(flight.velocity());
     }
   });
 
@@ -628,6 +661,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
 
   // Prevent right-click / long-press context menu on the canvas.
   canvas.addEventListener('contextmenu', e => e.preventDefault());
+  // Belt-and-suspenders with the CSS user-select rules: kill any text-selection
+  // gesture that starts on the canvas (the long-press "blue box" that otherwise
+  // captures the pointer and freezes OrbitControls until you tap to deselect).
+  canvas.addEventListener('selectstart', e => e.preventDefault());
 
   canvas.addEventListener('pointerdown', e => { ptrDn = [e.clientX, e.clientY]; });
   canvas.addEventListener('pointerup', e => {

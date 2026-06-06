@@ -40,6 +40,12 @@ canvas {
   width: 100%; height: 100%;
   touch-action: none; /* needed for OrbitControls gesture handling */
   -webkit-touch-callout: none; /* suppress iOS long-press "Save Image" menu */
+  /* All prefixes required: bare `user-select` alone does NOT stop the
+     long-press blue text-selection box on WebKit/iOS, which steals the
+     pointer and breaks OrbitControls until you tap to deselect. */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
   user-select: none;
 }
 

@@ -55,5 +55,36 @@ console.log('\n[flight] safety: ground clamp, rate cap, finiteness');
   check('disabled model does not move', m.y === 0 && m.vy === 0);
 }
 
+console.log('\n[flight] full 3-axis force vector + velocity feedback');
+{
+  const m = new FlightModel({ mass: 4, g: 9.8 });
+  const W = m.weight();
+
+  // A lateral aero force (fx) accelerates the creature sideways in x.
+  m.reset();
+  for (let i = 0; i < 120; i++) m.update(1 / 60, [W * 0.5, W, 0]);
+  check('lateral force moves x', m.x > 0.05, `x=${m.x.toFixed(3)}`);
+  check('lateral force builds vx', m.vx > 0.05, `vx=${m.vx.toFixed(3)}`);
+
+  // Throttle drives forward (z) motion and is exposed on velocity().
+  m.reset();
+  m.update(1 / 60, [0, W, 0], 10);
+  check('throttle sets forward speed', Math.abs(m.velocity()[2] - 10) < 1e-9, `vz=${m.vz}`);
+  check('velocity() returns the 3-vector fed back to the solver', m.velocity().length === 3);
+
+  // Stall + no lift → it accelerates downward; that −vy is what becomes the
+  // upward relative wind the solver feels ("the wind of its falling").
+  m.setLaunch(0, 0, 0); m.y = 20;   // launch floor at 0, but drop from altitude
+  for (let i = 0; i < 30; i++) m.update(1 / 60, [0, 0, 0]);
+  check('zero lift from altitude builds downward velocity', m.vy < -0.5, `vy=${m.vy.toFixed(2)}`);
+  check('falling velocity is the feedback signal', m.velocity()[1] === m.vy);
+
+  // Feeding back real vertical drag (a force opposing the fall) arrests it —
+  // emergent terminal velocity, not a scripted clamp.
+  const v0 = m.vy;
+  for (let i = 0; i < 60; i++) m.update(1 / 60, [0, W * 1.2, 0]); // drag now exceeds weight
+  check('upward aero force (drag) decelerates the fall', m.vy > v0, `v0=${v0.toFixed(2)} → vy=${m.vy.toFixed(2)}`);
+}
+
 console.log(`\n${failed === 0 ? '✓ ALL PASS' : '✗ FAILURES'} — ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
