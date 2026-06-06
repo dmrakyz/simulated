@@ -17,6 +17,7 @@ import { CreatureBuilder }   from './creature/builder.js';
 import { AeroController }     from './aero-controller.js';
 import { FlowRenderer }       from './rendering/flow-renderer.js';
 import { FlightModel }        from './flight-model.js';
+import { measureCreature }    from './lbm/creature-bounds.js';
 
 /* ── Loading-screen helpers ─────────────────────────────────────── */
 const stepsEl = document.getElementById('ld-steps');
@@ -196,10 +197,14 @@ async function main() {
       // its own motion (e.g. the upward wind of a fall). Throttle holds airspeed.
       if (flight.enabled) {
         const px = flight.x, py = flight.y, pz = flight.z;   // pre-step position
-        flight.update(dt, f, flight.throttle);
+        flight.update(dt, f, aero.torque, flight.throttle);
         aero.setVelocity(flight.velocity());                 // close the loop
         if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
         if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
+        // Apply rotation to the creature mesh.
+        const [qx, qy, qz, qw] = flight.q;
+        if (builder) builder.root.quaternion.set(qx, qy, qz, qw);
+        if (flowRenderer && flowRenderer.obj) flowRenderer.obj.quaternion.set(qx, qy, qz, qw);
         // Chase camera: translate the orbit target AND the eye by the same
         // delta, so the creature stays framed without the camera lagging behind
         // or spinning to track a receding point. User orbit/zoom still works.
@@ -442,6 +447,8 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     const lz = builder?.root.position.z ?? DOM / 2;
     flight.throttle = aeroSpeed;
     flight.setLaunch(lx, 0, lz);   // also seeds vz = throttle
+    const mb = measureCreature(parts);
+    flight.setCreatureExtent(mb.W, mb.H, mb.L);
     if (builder) { builder.root.visible = true; builder.root.position.set(lx, 0, lz); }
     if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(lx, 0, lz);
     if (orbit) orbit.target.set(lx, 0, lz);   // camera watches the launch point
@@ -466,9 +473,11 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     _restoreAoA();
     flight.reset();                // returns creature to launch position
     if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
+    if (builder) builder.root.quaternion.set(0, 0, 0, 1);
     if (flowRenderer) {
       flowRenderer.setVisible(false);
       if (flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
+      if (flowRenderer.obj) flowRenderer.obj.quaternion.set(0, 0, 0, 1);
     }
     // Restore the pre-sim camera (eye + target) only when leaving an active sim.
     if (wasActive && orbit && _savedCam) {
@@ -595,6 +604,14 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     document.getElementById('scale-val').textContent = (+e.target.value).toFixed(1);
     builder?.scaleSelected(+e.target.value);
   });
+  ['x','y','z'].forEach(ax => {
+    const id = `part-scale-${ax}`;
+    document.getElementById(id)?.addEventListener('input', e => {
+      const v = +e.target.value;
+      document.getElementById(`scale-${ax}-val`).textContent = v.toFixed(1);
+      builder?.scaleAxisSelected(ax, v);
+    });
+  });
 
   /* Wing shape sliders — only visible when a WING or FIN is selected. */
   document.getElementById('wng-cam')?.addEventListener('input', e => {
@@ -611,6 +628,12 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     const v = +e.target.value / 100;
     document.getElementById('wng-cp-val').textContent = e.target.value;
     builder?.updateSelectedAirfoil('p', v);
+  });
+  document.getElementById('wng-sw')?.addEventListener('input', e => {
+    const deg = +e.target.value;
+    const v = deg * Math.PI / 180;
+    document.getElementById('wng-sw-val').textContent = deg;
+    builder?.updateSelectedAirfoil('sweep', v);
   });
 
   /* Selected-part info readout + wing-shape panel show/hide. */
@@ -639,7 +662,25 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
         if (camEl) { camEl.value = camPct; document.getElementById('wng-cam-val').textContent = camPct; }
         if (thkEl) { thkEl.value = thkPct; document.getElementById('wng-thk-val').textContent = thkPct; }
         if (cpEl)  { cpEl.value  = cpPct;  document.getElementById('wng-cp-val').textContent  = cpPct; }
+        const swEl = document.getElementById('wng-sw');
+        if (swEl) {
+          const swDeg = Math.round((af.sweep ?? 0) * 180 / Math.PI);
+          swEl.value = swDeg;
+          document.getElementById('wng-sw-val').textContent = swDeg;
+        }
       }
+    }
+
+    // Populate per-axis scale sliders from the selected part's current scale.
+    const selNode = builder?.selected;
+    if (selNode) {
+      const sc = selNode.obj.scale;
+      const sx = document.getElementById('part-scale-x');
+      const sy = document.getElementById('part-scale-y');
+      const sz = document.getElementById('part-scale-z');
+      if (sx) { sx.value = Math.abs(sc.x).toFixed(1); document.getElementById('scale-x-val').textContent = Math.abs(sc.x).toFixed(1); }
+      if (sy) { sy.value = sc.y.toFixed(1); document.getElementById('scale-y-val').textContent = sc.y.toFixed(1); }
+      if (sz) { sz.value = sc.z.toFixed(1); document.getElementById('scale-z-val').textContent = sc.z.toFixed(1); }
     }
   });
 

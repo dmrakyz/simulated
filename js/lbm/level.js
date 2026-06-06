@@ -62,6 +62,11 @@ export class LbmLevel {
     this.origin = opts.origin ? opts.origin.slice() : [0, 0, 0];
     // Per-step momentum-exchange force on the body (lattice units).
     this.forceLattice = [0, 0, 0];
+    this.torqueLattice = [0, 0, 0];
+    // Grid centre in local physical coordinates (used as torque reference = approx CoM).
+    this._gcX = dims[0] * 0.5 * dx;
+    this._gcY = dims[1] * 0.5 * dx;
+    this._gcZ = dims[2] * 0.5 * dx;
     this.initEquilibrium(RHO0, [0, 0, 0]);
   }
 
@@ -122,6 +127,7 @@ export class LbmLevel {
     //     contributes e·(f_in + f_bounced). This is a surface integral, so it
     //     is accurate and far less noisy than summing bulk fluid momentum.
     let Fx = 0, Fy = 0, Fz = 0;
+    let Tx = 0, Ty = 0, Tz = 0;
     const iusqr = 1.5 * (inletVel[0] ** 2 + inletVel[1] ** 2 + inletVel[2] ** 2);
     for (let i = 0; i < nx; i++) {
       for (let j = 0; j < ny; j++) {
@@ -152,9 +158,17 @@ export class LbmLevel {
               f2[b + q] = bounced;
               // The link from c toward the solid points along c_op; accumulate
               // momentum exchanged across it. Force on the body is +e·(f_in+f_back).
-              Fx += C[op][0] * (fIn + bounced);
-              Fy += C[op][1] * (fIn + bounced);
-              Fz += C[op][2] * (fIn + bounced);
+              const dfx = C[op][0] * (fIn + bounced);
+              const dfy = C[op][1] * (fIn + bounced);
+              const dfz = C[op][2] * (fIn + bounced);
+              Fx += dfx; Fy += dfy; Fz += dfz;
+              // Torque about the grid centre (≈ creature CoM). r is in physical metres.
+              const rx = (i + 0.5) * this.dx - this._gcX;
+              const ry = (j + 0.5) * this.dx - this._gcY;
+              const rz = (k + 0.5) * this.dx - this._gcZ;
+              Tx += ry * dfz - rz * dfy;
+              Ty += rz * dfx - rx * dfz;
+              Tz += rx * dfy - ry * dfx;
             } else {
               f2[b + q] = f[sc * Q + q];
             }
@@ -163,6 +177,7 @@ export class LbmLevel {
       }
     }
     this.forceLattice = [Fx, Fy, Fz];
+    this.torqueLattice = [Tx, Ty, Tz];
 
     // Swap buffers.
     const tmp = this.f; this.f = this.f2; this.f2 = tmp;

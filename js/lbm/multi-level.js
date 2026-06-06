@@ -60,6 +60,7 @@ export class MultiLevelLBM {
     // EMA-smoothed body force (lattice units) — kills frame-to-frame jitter in
     // the displayed lift/drag without lagging perceptibly.
     this.forceEMA = [0, 0, 0];
+    this.torqueEMA = [0, 0, 0];
   }
 
   /** Rebuild the fine-grid solid mask from the current articulated pose. */
@@ -98,10 +99,14 @@ export class MultiLevelLBM {
 
       const mask = lv === 0 ? this.mask : null;
       let fx = 0, fy = 0, fz = 0;
+      let tx = 0, ty = 0, tz = 0;
       for (let s = 0; s < level.nSub; s++) {
         if (level.stepGPU) level.stepGPU(inlet, mask);
         else level.step(inlet, mask);
-        if (lv === 0) { fx += level.forceLattice[0]; fy += level.forceLattice[1]; fz += level.forceLattice[2]; }
+        if (lv === 0) {
+          fx += level.forceLattice[0]; fy += level.forceLattice[1]; fz += level.forceLattice[2];
+          tx += level.torqueLattice[0]; ty += level.torqueLattice[1]; tz += level.torqueLattice[2];
+        }
       }
       // Average the fine-level force over its substeps, then EMA across frames.
       if (lv === 0 && level.nSub > 0) {
@@ -109,6 +114,9 @@ export class MultiLevelLBM {
         this.forceEMA[0] = (1 - a) * this.forceEMA[0] + a * fx * inv;
         this.forceEMA[1] = (1 - a) * this.forceEMA[1] + a * fy * inv;
         this.forceEMA[2] = (1 - a) * this.forceEMA[2] + a * fz * inv;
+        this.torqueEMA[0] = (1 - a) * this.torqueEMA[0] + a * tx * inv;
+        this.torqueEMA[1] = (1 - a) * this.torqueEMA[1] + a * ty * inv;
+        this.torqueEMA[2] = (1 - a) * this.torqueEMA[2] + a * tz * inv;
       }
     }
   }
@@ -126,6 +134,18 @@ export class MultiLevelLBM {
     const { dt } = this.fag.sound;
     const k = (rhoAir * dx * dx * dx * dx) / (dt * dt);
     return [this.forceEMA[0] * k, this.forceEMA[1] * k, this.forceEMA[2] * k];
+  }
+
+  /**
+   * Net aerodynamic torque on the creature (N·m) about the FAG grid centre.
+   * Same conversion as netForce() since r is already in physical metres in the
+   * torque accumulation (so the factor is the same: rhoAir·dx⁴/dt²).
+   */
+  netTorque(rhoAir = 1.225) {
+    const dx = this.fag.dx;
+    const { dt } = this.fag.sound;
+    const k = (rhoAir * dx * dx * dx * dx) / (dt * dt);
+    return [this.torqueEMA[0] * k, this.torqueEMA[1] * k, this.torqueEMA[2] * k];
   }
 
   /** Compact stats for HUD / debugging. */

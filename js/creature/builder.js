@@ -93,6 +93,7 @@ export class CreatureBuilder {
       case 'sphere':  return new T.SphereGeometry(s[0], 16, 12);
       case 'box':     return new T.BoxGeometry(s[0], s[1], s[2] ?? s[0]);
       case 'cone':    return new T.ConeGeometry(s[0], s[1], 12);
+      case 'cylinder': return new T.CylinderGeometry(s[0], s[2] ?? s[0], s[1], 12);
       // A real NACA airfoil lofted across the span — span on local X, chord on
       // local Z (leading edge at +Z), thickness/camber on local Y (up). This is
       // the exact convention the solid-mask rasterizer voxelizes, so the wing
@@ -112,7 +113,9 @@ export class CreatureBuilder {
     const pos = [];
     // Two span stations; profile placed with LE at +Z, normal on Y.
     for (const sx of [-sh, sh]) {
-      for (const [xf, yf] of prof) { pos.push(sx, yf * chord, ch - xf * chord); }
+      // Sweep shifts the chord position toward the trailing edge at the wing tip.
+      const sweepOff = Math.abs(sx) * Math.tan(af.sweep ?? 0);
+      for (const [xf, yf] of prof) { pos.push(sx, yf * chord, ch - xf * chord - sweepOff); }
     }
     const idx = [];
     for (let i = 0; i < np; i++) {              // side surface (span quads)
@@ -260,6 +263,19 @@ export class CreatureBuilder {
     this.selected.scale = v;
     this.selected.obj.scale.setScalar(v);
     this._syncFromGizmo();
+    this._emit();
+  }
+  /** Scale the selected node along a single axis (x, y, or z) independently. */
+  scaleAxisSelected(axis, value) {
+    if (!this.selected) return;
+    this.selected.obj.scale[axis] = value;
+    // Mirror: flip x-sign of x-axis for the twin.
+    if (this.selected.mirrorId) {
+      const twin = this.nodes.get(this.selected.mirrorId);
+      if (twin) {
+        twin.obj.scale[axis] = axis === 'x' ? -value : value;
+      }
+    }
     this._emit();
   }
   deleteSelected() {
@@ -477,6 +493,13 @@ export class CreatureBuilder {
       <div class="ptitle" style="margin-top:10px">Part Scale: <span id="scale-val">1.0</span>×</div>
       <input type="range" id="part-scale" min="0.3" max="3" step="0.1" value="1">
 
+      <div class="ptitle" style="margin-top:10px">Scale X: <span id="scale-x-val">1.0</span></div>
+      <input type="range" id="part-scale-x" min="0.1" max="4" step="0.1" value="1">
+      <div class="ptitle" style="margin-top:4px">Scale Y: <span id="scale-y-val">1.0</span></div>
+      <input type="range" id="part-scale-y" min="0.1" max="4" step="0.1" value="1">
+      <div class="ptitle" style="margin-top:4px">Scale Z: <span id="scale-z-val">1.0</span></div>
+      <input type="range" id="part-scale-z" min="0.1" max="4" step="0.1" value="1">
+
       <div class="cbtn-row" style="margin-top:14px">
         <button class="cbtn" id="btn-save">Save</button>
         <button class="cbtn" id="btn-load">Load</button>
@@ -494,6 +517,8 @@ export class CreatureBuilder {
         <input type="range" id="wng-thk" min="4" max="20" step="1" value="12">
         <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:4px">Camber position: <span id="wng-cp-val">40</span>%</div>
         <input type="range" id="wng-cp" min="20" max="60" step="5" value="40">
+        <div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:4px">Sweep: <span id="wng-sw-val">0</span>°</div>
+        <input type="range" id="wng-sw" min="-45" max="45" step="5" value="0">
         <div style="font-size:10px;color:rgba(255,255,255,.3);margin-top:4px;line-height:1.5">
           Higher camber = more lift at low speed.<br>Thicker = stronger but more drag.
         </div>

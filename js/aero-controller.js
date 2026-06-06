@@ -19,6 +19,7 @@ export class AeroController {
     this.isWorker = false;
     this.active = false;
     this.force = [0, 0, 0];
+    this.torque = [0, 0, 0];
     this.flow = null;
     this.stats = null;
     this.tickMs = 0;
@@ -41,7 +42,7 @@ export class AeroController {
       });
       worker.onmessage = (e) => {
         const m = e.data;
-        if (m.type === 'snapshot') { this.force = m.force; this.flow = m.flow; this.tickMs = m.tickMs; }
+        if (m.type === 'snapshot') { this.force = m.force; this.torque = m.torque ?? [0,0,0]; this.flow = m.flow; this.tickMs = m.tickMs; }
         else if (m.type === 'error') console.error('Aero worker:', m.msg);
       };
       this.worker = worker;
@@ -75,6 +76,7 @@ export class AeroController {
     this.sim.setCreatureVelocity(this._vel);
     this.sim.step();
     this.force = this.sim.netForce();
+    this.torque = this.sim.netTorque();
     // Build a light flow snapshot inline (same downsampling as the worker).
     const fag = this.sim.fag, [nx, ny, nz] = fag.dims;
     const step = Math.max(1, Math.floor(Math.max(nx, ny, nz) / 8));

@@ -80,7 +80,7 @@ function loop() {
   }
 
   const flow = buildFlowSnapshot();
-  postMessage({ type: 'snapshot', force: sim.netForce(), flow, tickMs }, [flow.vec.buffer]);
+  postMessage({ type: 'snapshot', force: sim.netForce(), torque: sim.netTorque(), flow, tickMs }, [flow.vec.buffer]);
 
   // Always sleep at least TARGET_MS so we never pin the CPU core.
   // If the step itself was slow we still sleep the full interval.

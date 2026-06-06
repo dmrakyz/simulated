@@ -23,15 +23,17 @@ export const PART_TYPES = {
   // A cambered wing makes lift even at 0° AoA; a symmetric fin is a neutral
   // control surface. The same params voxelize into the LBM, so the shape you
   // build is the shape the air feels.
-  WING:     { label:'Wing',     geom:'airfoil', size:[1.40, 0.90], col:0x88aacc, joint:'hinge', airfoil:{ m:0.04, p:0.40, t:0.12 } },
-  FIN:      { label:'Fin',      geom:'airfoil', size:[0.70, 0.50], col:0x6fb0c0, joint:'hinge', airfoil:{ m:0.00, p:0.40, t:0.09 } },
+  WING:     { label:'Wing',     geom:'airfoil', size:[1.40, 0.90], col:0x88aacc, joint:'hinge', airfoil:{ m:0.04, p:0.40, t:0.12, sweep:0 } },
+  FIN:      { label:'Fin',      geom:'airfoil', size:[0.70, 0.50], col:0x6fb0c0, joint:'hinge', airfoil:{ m:0.00, p:0.40, t:0.09, sweep:0 } },
   CLAW:     { label:'Claw',     geom:'cone',    size:[0.10, 0.34], col:0x3a3530, joint:'weld'  },
   HORN:     { label:'Horn',     geom:'cone',    size:[0.12, 0.52], col:0xe8e0cc, joint:'weld'  },
   EYE:      { label:'Eye',      geom:'sphere',  size:[0.13],       col:0x141820, joint:'weld'  },
+  TUBE:     { label:'Tube',     geom:'cylinder',size:[0.18, 0.80, 0.18], col:0x667788, joint:'weld' },
+  SLAB:     { label:'Slab',     geom:'box',     size:[0.80, 0.06, 0.60], col:0x556677, joint:'weld' },
 };
 
 /* Display order in the build palette. */
 export const PART_ORDER = [
   'TORSO', 'HEAD', 'SPINE', 'LIMB', 'TAIL', 'TENTACLE',
-  'WING', 'FIN', 'CLAW', 'HORN', 'BONE', 'EYE',
+  'WING', 'FIN', 'CLAW', 'HORN', 'BONE', 'EYE', 'TUBE', 'SLAB',
 ];
