@@ -211,8 +211,9 @@ async function main() {
         aero.setVelocity(flight.velocity());                 // close the loop
         if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
         if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
-        // Apply rotation to the creature mesh.
-        const [qx, qy, qz, qw] = flight.q;
+        // Apply rotation to the creature mesh (qx,qy,qz declared above for the
+        // stabilizer; qw is the remaining scalar component).
+        const qw = flight.q[3];
         if (builder) builder.root.quaternion.set(qx, qy, qz, qw);
         if (flowRenderer && flowRenderer.obj) flowRenderer.obj.quaternion.set(qx, qy, qz, qw);
         // Chase camera: translate the orbit target AND the eye by the same

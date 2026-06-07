@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const suites = ['lbm-geometry.test.mjs', 'lbm-solver.test.mjs', 'lbm-airfoil.test.mjs', 'lbm-multilevel.test.mjs', 'flight-model.test.mjs', 'flight-stability.test.mjs'];
+const suites = ['syntax.test.mjs', 'lbm-geometry.test.mjs', 'lbm-solver.test.mjs', 'lbm-airfoil.test.mjs', 'lbm-multilevel.test.mjs', 'flight-model.test.mjs', 'flight-stability.test.mjs'];
 
 let failed = 0;
 for (const s of suites) {

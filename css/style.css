@@ -6,6 +6,12 @@
 
 html, body {
   width: 100%; height: 100%;
+  /* Pin the document itself so the whole page can never scroll or rubber-band.
+     `overflow:hidden` alone is not enough in iOS Safari / in-app webviews:
+     the layout viewport can be taller than the visual viewport, letting the
+     user drag the entire UI around. `position:fixed` on the root removes the
+     scroll container entirely. */
+  position: fixed; inset: 0;
   overflow: hidden;
   background: #060810;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -25,7 +31,10 @@ html, body {
   position: fixed; inset: 0;
   display: grid;
   grid-template-areas: "tb" "cv";
-  grid-template-rows: 48px 1fr;
+  /* `auto` (not a fixed 48px) so the toolbar row grows to include the iOS
+     notch safe-area its min-height reserves; otherwise the toolbar overflows
+     its track and pushes the canvas, which reads as the UI being "too tall". */
+  grid-template-rows: auto 1fr;
   visibility: hidden; /* shown after load */
 }
 #app.ready { visibility: visible; }
