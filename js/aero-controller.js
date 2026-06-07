@@ -100,7 +100,10 @@ export class AeroController {
           const c = fag.idx(i, j, k);
           vec[o++] = fag.ux[c]; vec[o++] = fag.uy[c]; vec[o++] = fag.uz[c];
         }
-    this.flow = { dims: [sx, sy, sz], step, origin: fag.desc.origin, dx: fag.dx, cellDx: fag.dx * step, vec };
+    // Creature-relative origin (see lbm-worker.js): the renderer pins the field
+    // to the creature's live position, so the grid corner is given about the body.
+    const origin = [-nx * fag.dx / 2, -ny * fag.dx / 2, -nz * fag.dx / 2];
+    this.flow = { dims: [sx, sy, sz], step, origin, dx: fag.dx, cellDx: fag.dx * step, vec };
   }
 
   stop() {

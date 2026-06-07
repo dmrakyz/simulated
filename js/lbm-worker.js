@@ -61,9 +61,15 @@ function buildFlowSnapshot() {
       }
     }
   }
+  // Creature-relative origin (grid min-corner about the body centre). The
+  // renderer places the whole field at the creature's live world position, so a
+  // body-relative origin keeps the flow glued to the creature as it flies — a
+  // world-space origin (the grid's fixed spawn corner) would double-count the
+  // offset and leave the streamlines stranded where the creature started.
+  const origin = [-nx * fag.dx / 2, -ny * fag.dx / 2, -nz * fag.dx / 2];
   return {
     dims: [sx, sy, sz], step,
-    origin: fag.desc.origin, dx: fag.dx,
+    origin, dx: fag.dx,
     cellDx: fag.dx * step, vec,
   };
 }

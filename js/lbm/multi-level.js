@@ -55,6 +55,12 @@ export class MultiLevelLBM {
     this.setCreatureParts(parts);
 
     // Smoothed Galilean far-field velocity (m/s) to suppress acoustic ringing.
+    // This EMA also gently rate-limits how fast the inlet (and hence the body
+    // force) can ramp as the creature's velocity changes, which keeps the
+    // explicit flight↔LBM coupling from slamming the force to huge values in a
+    // single step. Kept slow on purpose; the flight model bounds the force and
+    // damps semi-implicitly, so stability comes from there, not from this lag.
+    this.uAlpha = opts.uAlpha ?? 0.05;
     this.uSmooth = [0, 0, 0];
     this.vCreature = [0, 0, 0];
     // Ambient world wind (m/s, world frame). The far-field flow the creature
@@ -103,9 +109,10 @@ export class MultiLevelLBM {
   step() {
     // Smooth the frame's far-field velocity. Track (v_creature − worldWind) so
     // toLatticeVel's negation gives the physical inlet worldWind − v_creature.
+    const ua = this.uAlpha;
     for (let a = 0; a < 3; a++) {
       const target = this.vCreature[a] - this.worldWind[a];
-      this.uSmooth[a] = 0.95 * this.uSmooth[a] + 0.05 * target;
+      this.uSmooth[a] = (1 - ua) * this.uSmooth[a] + ua * target;
     }
 
     // Run coarsest → finest so coarse state is ready to feed finer inlets.

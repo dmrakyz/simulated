@@ -195,6 +195,10 @@ async function main() {
     if (aero.active) {
       if (!aero.isWorker) aero.stepLocal();
       if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
+      // The flow snapshot is creature-relative, so pin the field to wherever the
+      // creature mesh actually is — every frame, whether or not free flight is
+      // integrating — otherwise the streamlines drift off the body.
+      if (flowRenderer?.obj && builder) flowRenderer.obj.position.copy(builder.root.position);
       const f = aero.force;
 
       // Free flight: integrate aero force + gravity, feed velocity back so
@@ -202,25 +206,29 @@ async function main() {
       if (flight.enabled) {
         const px = flight.x, py = flight.y, pz = flight.z;
 
-        // Scale LBM torque way down: moment-arm × force noise is large.
-        // Stabilizer PD controller targets identity orientation (wings level).
-        const TORQUE_SCALE = 0.12;
+        // Scale LBM torque way down: moment-arm × force noise is large and
+        // lagged, so giving it much authority tumbles the body.
+        const TORQUE_SCALE = 0.06;
         const [qx, qy, qz] = flight.q;
-        const Kp = 8, Kd = 3;
+        // Mild always-on attitude leveling: a lag-free PD pull toward wings-level
+        // that keeps the noisy LBM torque from tumbling the creature (the wild
+        // pitching in the bug reports). The Stabilizer toggle just stiffens it.
+        const Kp = stab.on ? 8 : 3, Kd = stab.on ? 5 : 4;
         const tq = [
-          aero.torque[0] * TORQUE_SCALE + (stab.on ? -Kp * qx - Kd * flight.omega[0] : 0),
-          aero.torque[1] * TORQUE_SCALE + (stab.on ? -Kp * qy - Kd * flight.omega[1] : 0),
-          aero.torque[2] * TORQUE_SCALE + (stab.on ? -Kp * qz - Kd * flight.omega[2] : 0),
+          aero.torque[0] * TORQUE_SCALE - Kp * qx - Kd * flight.omega[0],
+          aero.torque[1] * TORQUE_SCALE - Kp * qy - Kd * flight.omega[1],
+          aero.torque[2] * TORQUE_SCALE - Kp * qz - Kd * flight.omega[2],
         ];
         flight.update(dt, f, tq);
         aero.setVelocity(flight.velocity());                 // close the loop
         if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
-        if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
         // Apply rotation to the creature mesh (qx,qy,qz declared above for the
-        // stabilizer; qw is the remaining scalar component).
+        // stabilizer; qw is the remaining scalar component). The flow field is
+        // world-axis-aligned (the lattice doesn't rotate with the body), so the
+        // creature mesh rotates but the streamline object must NOT — it stays at
+        // identity and is only translated to follow the body.
         const qw = flight.q[3];
         if (builder) builder.root.quaternion.set(qx, qy, qz, qw);
-        if (flowRenderer && flowRenderer.obj) flowRenderer.obj.quaternion.set(qx, qy, qz, qw);
         // Chase camera: translate the orbit target AND the eye by the same
         // delta, so the creature stays framed without the camera lagging behind
         // or spinning to track a receding point. User orbit/zoom still works.
@@ -396,7 +404,14 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     const len = Math.hypot(x, y, z) || 1;
     return [(x / len) * windMag, (y / len) * windMag, (z / len) * windMag];
   }
-  function _pushWind() { if (aero) aero.setWorldWind(_worldWind()); }
+  function _pushWind() {
+    const w = _worldWind();
+    if (aero) aero.setWorldWind(w);
+    // Keep the flight model's instantaneous drag referenced to the same wind, so
+    // it damps RELATIVE airspeed (drift-with-the-air) instead of fighting the
+    // boost and letting the lagged LBM force oscillate the body.
+    flight.setWind(w);
+  }
 
   // Active stabilizer: PD controller targeting identity orientation (level
   // flight). State lives in the `stab` cell shared with main()'s tick loop.

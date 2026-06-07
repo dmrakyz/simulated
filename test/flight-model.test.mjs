@@ -66,9 +66,9 @@ console.log('\n[flight] full 3-axis force vector + velocity feedback');
   check('lateral force moves x', m.x > 0.05, `x=${m.x.toFixed(3)}`);
   check('lateral force builds vx', m.vx > 0.05, `vx=${m.vx.toFixed(3)}`);
 
-  // No thrust: lateral aero force (fx) is the only source of forward motion.
+  // No thrust: a fore-aft aero force (fz) is the only source of forward motion.
   m.reset();
-  for (let i = 0; i < 120; i++) m.update(1 / 60, [0, W, 0.5]);
+  for (let i = 0; i < 120; i++) m.update(1 / 60, [0, W, W * 0.3]);
   check('fz aero force moves z', m.vz > 0.1, `vz=${m.vz.toFixed(2)}`);
   check('velocity() returns the 3-vector fed back to the solver', m.velocity().length === 3);
 

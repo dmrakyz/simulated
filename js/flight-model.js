@@ -36,7 +36,13 @@ export class FlightModel {
     // term is the instantaneous counter-force that breaks that loop: it pulls
     // toward a stable terminal velocity on its own, so the LBM force only has
     // to add lift/maneuvering detail on top of an already-stable glide.
-    this.damp     = opts.damp     ?? 1.0;
+    this.damp     = opts.damp     ?? 3.0;
+    // Aerodynamic force envelope, in g. The LBM force momentarily spikes to tens
+    // of g when the relative airspeed blows up; integrating such a spike with
+    // explicit Euler overshoots the velocity in one coupling step and sets up a
+    // self-sustaining limit cycle (the violent "stray leaf" wobble). Real flyers
+    // pull a few g — clamp to that so a transient spike can't slam the body.
+    this.maxAeroG = opts.maxAeroG ?? 3;
     this.maxRate  = opts.maxRate  ?? 18;
     // Rotational damp is intentionally high: LBM torque is noisy, so we rely
     // on heavy damping to absorb noise and let only sustained torques rotate.
@@ -44,6 +50,12 @@ export class FlightModel {
     this.maxOmega = opts.maxOmega ?? 0.8;
     this.enabled  = true;
     this.inertia  = [1, 1, 1];
+    // Ambient world wind (m/s). The instantaneous damping opposes airspeed
+    // RELATIVE to this, not absolute ground velocity — so under a wind boost the
+    // drag pulls the body toward drifting WITH the air (the same equilibrium the
+    // LBM is driving toward), instead of fighting the wind and leaving the
+    // lagged LBM force to overshoot and oscillate.
+    this.wind     = [0, 0, 0];
     this._lx = 0; this._ly = 0; this._lz = 0;
     this.reset();
   }
@@ -58,6 +70,9 @@ export class FlightModel {
   }
 
   setLaunch(x, y, z) { this._lx = x; this._ly = y; this._lz = z; this.reset(); }
+
+  /** Ambient world wind (m/s); instantaneous drag opposes airspeed relative to it. */
+  setWind(w) { this.wind = [w[0] || 0, w[1] || 0, w[2] || 0]; }
 
   reset() {
     this.x = this._lx; this.y = this._ly; this.z = this._lz;
@@ -85,16 +100,33 @@ export class FlightModel {
     const t = Math.min(dt, 0.05);
 
     const m  = this.mass;
-    const fx = Array.isArray(force) ? (force[0] || 0) : 0;
-    const fy = Array.isArray(force) ? (force[1] || 0) : (force || 0);
-    const fz = Array.isArray(force) ? (force[2] || 0) : 0;
+    let fx = Array.isArray(force) ? (force[0] || 0) : 0;
+    let fy = Array.isArray(force) ? (force[1] || 0) : (force || 0);
+    let fz = Array.isArray(force) ? (force[2] || 0) : 0;
 
+    // Clamp the aero force to a physical envelope (maxAeroG × weight) before
+    // integrating, so a transient LBM spike can't slam the body in one step.
+    const fmax = this.maxAeroG * m * this.g;
+    const fmag = Math.hypot(fx, fy, fz);
+    if (fmag > fmax) { const s = fmax / fmag; fx *= s; fy *= s; fz *= s; }
+
+    // Explicit step: clamped aero + gravity.
     this.vx += (fx / m) * t;
     this.vy += (fy / m - this.g) * t;
     this.vz += (fz / m) * t;
-    this.vx -= this.damp * this.vx * t;
-    this.vy -= this.damp * this.vy * t;
-    this.vz -= this.damp * this.vz * t;
+
+    // Semi-implicit aerodynamic drag toward the ambient wind (airspeed-relative).
+    //   v ← w + (v − w) / (1 + damp·t)
+    // is the implicit solution of v̇ = −damp·(v − w): unconditionally stable, so
+    // the damping can be strong enough to actually hold the body near the wind
+    // drift WITHOUT the explicit-Euler blow-up that turned drag into oscillation.
+    // With no wind (w=0) this reduces to ordinary drag that settles to rest;
+    // under a boost it settles toward drifting with the air — the LBM's own
+    // equilibrium — so the two forces cooperate instead of fighting.
+    const dl = 1 / (1 + this.damp * t);
+    this.vx = this.wind[0] + (this.vx - this.wind[0]) * dl;
+    this.vy = this.wind[1] + (this.vy - this.wind[1]) * dl;
+    this.vz = this.wind[2] + (this.vz - this.wind[2]) * dl;
     this.vx = clamp(this.vx, -this.maxRate, this.maxRate);
     this.vy = clamp(this.vy, -this.maxRate, this.maxRate);
     this.vz = clamp(this.vz, -this.maxRate, this.maxRate);
