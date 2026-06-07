@@ -398,6 +398,10 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   // chase camera moves the eye during flight, so both eye and target must be
   // put back or you'd return to WORLD staring in from wherever the bird ended up.
   let _savedCam = null;
+  // The creature's BUILD-mode altitude, captured when entering SIMULATE and
+  // restored on exit — so the bird returns to its build platform, not to
+  // wherever gravity left it.
+  let _buildY = 0;
 
   /* ── Mode tabs ─────────────────────────────────────────────── */
   document.querySelectorAll('.mbtn[data-mode]').forEach(b => {
@@ -466,15 +470,19 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     };
     const lx = builder?.root.position.x ?? DOM / 2;
     const lz = builder?.root.position.z ?? DOM / 2;
+    _buildY = builder?.root.position.y ?? 0;   // where it currently sits — the start altitude
 
-    // Measure the creature's bounding box (parts are relative to root at y=0).
+    // Measure the creature's bounding box (parts are world positions; root is
+    // currently at _buildY). The root's Y at which the creature's LOWEST point
+    // rests exactly on the y=0 ground plane is offset from _buildY by however
+    // far that lowest point sits below/above the root right now.
     const mb = measureCreature(parts);
-    // Raise the creature so its lowest point sits on the y=0 ground plane.
-    const groundY = Math.max(0, -(mb.min[1] ?? 0));
+    const groundY = _buildY - (mb.min[1] ?? 0);
     flight.setLaunch(lx, groundY, lz);
+    flight.y = _buildY;             // start where it is — gravity brings it down to groundY
     flight.setCreatureExtent(mb.W, mb.H, mb.L);
 
-    if (builder) { builder.root.visible = true; builder.root.position.set(lx, groundY, lz); }
+    if (builder) { builder.root.visible = true; builder.root.position.set(lx, flight.y, lz); }
     if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(lx, groundY, lz);
     if (orbit) orbit.target.set(lx, groundY, lz);
 
@@ -499,7 +507,8 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     const wasActive = aero?.active ?? false;
     if (aero) aero.stop();
     _restoreAoA();
-    flight.reset();                // returns creature to launch position
+    flight.reset();
+    flight.y = _buildY;             // back to the build platform, not the ground floor
     if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
     if (builder) builder.root.quaternion.set(0, 0, 0, 1);
     if (flowRenderer) {
@@ -579,6 +588,7 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     flyBtn.textContent = 'Free flight: ' + (flight.enabled ? 'on' : 'off');
     if (!flight.enabled) {
       flight.reset();
+      flight.y = _buildY;           // hold at the build altitude, not the ground floor
       if (builder) {
         builder.root.position.set(flight.x, flight.y, flight.z);
         builder.root.quaternion.set(0, 0, 0, 1);

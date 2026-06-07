@@ -26,8 +26,17 @@ export class FlightModel {
   constructor(opts = {}) {
     this.mass     = opts.mass     ?? 4;
     this.g        = opts.g        ?? 9.8;
-    // Residual linear damp keeps numerics tidy; real drag comes from LBM force.
-    this.damp     = opts.damp     ?? 0.01;
+    // Linear aerodynamic damping (≈ -c·v drag), applied every frame from the
+    // CURRENT velocity — i.e. with zero lag. The LBM force, by contrast, is
+    // smoothed and worker-throttled (~15 Hz vs. 60 Hz render): it reacts to
+    // where the creature WAS, not where it is. Feeding a stale, amplified
+    // correction back into a falling body is a textbook delayed-feedback
+    // oscillator — "fall a bit → big lagged shove the other way → overshoot
+    // → bigger lagged shove back" → it never settles (a "stray leaf"). This
+    // term is the instantaneous counter-force that breaks that loop: it pulls
+    // toward a stable terminal velocity on its own, so the LBM force only has
+    // to add lift/maneuvering detail on top of an already-stable glide.
+    this.damp     = opts.damp     ?? 1.0;
     this.maxRate  = opts.maxRate  ?? 18;
     // Rotational damp is intentionally high: LBM torque is noisy, so we rely
     // on heavy damping to absorb noise and let only sustained torques rotate.
