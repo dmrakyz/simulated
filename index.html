@@ -150,13 +150,6 @@
         real — tune speed, angle of attack, and mass to keep it aloft.
       </div>
 
-      <div class="ptitle" style="margin-top:14px">Thrust: <span id="aero-spd-val">8</span> N</div>
-      <input type="range" id="aero-speed" min="0" max="40" step="1" value="8">
-      <div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:4px;line-height:1.5">
-        Forward thrust force along the body. Drag sets the top speed — pitch the
-        nose up to trade speed for climb.
-      </div>
-
       <div class="ptitle" style="margin-top:14px">Wing angle of attack: <span id="aero-aoa-val">15</span>°</div>
       <input type="range" id="aero-aoa" min="-30" max="30" step="1" value="15">
       <div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:4px;line-height:1.5">
@@ -173,6 +166,9 @@
 
       <div class="cbtn-row" style="margin-top:14px">
         <button class="cbtn on" id="btn-fly">Free flight: on</button>
+        <button class="cbtn" id="btn-stab">Stabilizer: off</button>
+      </div>
+      <div class="cbtn-row">
         <button class="cbtn" id="btn-restart-aero">Restart</button>
       </div>
       <div class="cbtn-row">

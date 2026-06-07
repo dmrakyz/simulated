@@ -164,6 +164,9 @@ export class CreatureBuilder {
         const m = new T.Mesh(this._makeGeometry(def), this._makeMaterial(def));
         m.scale.setScalar(scale);
         m.position.set(0, 0, -i * segLen * scale * 1.05);
+        // CapsuleGeometry is Y-aligned by default; rotate so the long axis
+        // follows the chain's Z direction (otherwise segments look like columns).
+        m.rotation.x = Math.PI / 2;
         m.castShadow = true;
         grp.add(m);
         scale *= (def.taper ?? 0.9);
@@ -371,15 +374,20 @@ export class CreatureBuilder {
         leg.obj.rotation.x = Math.PI * 0.04;
       }
     } else if (name === 'bird') {
-      // Wings lie flat (normal up). rotation.z gives dihedral (tips raised);
-      // angle of attack is added in SIMULATE mode as a pitch about the span.
-      this._addNode('TORSO', V(cx, y, cz), { scale: 0.8 });
-      this._addNode('HEAD',  V(cx, y + 0.4, cz + 0.7), { scale: 0.6 });
-      const wl = this._addNode('WING', V(cx - 0.8, y + 0.15, cz));
-      wl.obj.rotation.z = Math.PI * 0.06;
-      const wr = this._addNode('WING', V(cx + 0.8, y + 0.15, cz));
-      wr.obj.rotation.z = -Math.PI * 0.06; wr.obj.scale.x *= -1;
-      this.chainLen = 4; this._addNode('TAIL', V(cx, y, cz - 0.8)); this.chainLen = savedChain;
+      // Body axis runs along Z. Wings span along X with slight dihedral (tips
+      // raised by rotation.z). AoA is applied in SIMULATE mode as wing pitch.
+      this._addNode('TORSO', V(cx, y, cz), { scale: 0.85 });
+      this._addNode('HEAD',  V(cx, y + 0.12, cz + 0.78), { scale: 0.48 });
+      // Wings — dihedral ~18° for roll stability.
+      const wl = this._addNode('WING', V(cx - 0.9, y + 0.1, cz + 0.05));
+      wl.obj.rotation.z = Math.PI * 0.10;
+      const wr = this._addNode('WING', V(cx + 0.9, y + 0.1, cz + 0.05));
+      wr.obj.rotation.z = -Math.PI * 0.10; wr.obj.scale.x *= -1;
+      // Horizontal tail: flat slab acts as a pitch stabiliser.
+      this._addNode('SLAB', V(cx, y + 0.04, cz - 1.05));
+      // Vertical fin for yaw stability (rotate FIN so span points up).
+      const fin = this._addNode('FIN', V(cx, y + 0.26, cz - 1.0), { scale: 0.65 });
+      fin.obj.rotation.z = Math.PI / 2;
     }
 
     this.mirror = savedMirror;

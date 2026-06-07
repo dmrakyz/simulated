@@ -128,15 +128,17 @@ export class MultiLevelLBM {
           tx += level.torqueLattice[0]; ty += level.torqueLattice[1]; tz += level.torqueLattice[2];
         }
       }
-      // Average the fine-level force over its substeps, then EMA across frames.
+      // Average over substeps, then EMA. Torque uses a slower EMA (lower α)
+      // because moment-arm × force noise is larger than pure force noise.
       if (lv === 0 && level.nSub > 0) {
-        const inv = 1 / level.nSub, a = 0.15;
-        this.forceEMA[0] = (1 - a) * this.forceEMA[0] + a * fx * inv;
-        this.forceEMA[1] = (1 - a) * this.forceEMA[1] + a * fy * inv;
-        this.forceEMA[2] = (1 - a) * this.forceEMA[2] + a * fz * inv;
-        this.torqueEMA[0] = (1 - a) * this.torqueEMA[0] + a * tx * inv;
-        this.torqueEMA[1] = (1 - a) * this.torqueEMA[1] + a * ty * inv;
-        this.torqueEMA[2] = (1 - a) * this.torqueEMA[2] + a * tz * inv;
+        const inv = 1 / level.nSub;
+        const af = 0.15, at = 0.05;  // force α, torque α
+        this.forceEMA[0] = (1 - af) * this.forceEMA[0] + af * fx * inv;
+        this.forceEMA[1] = (1 - af) * this.forceEMA[1] + af * fy * inv;
+        this.forceEMA[2] = (1 - af) * this.forceEMA[2] + af * fz * inv;
+        this.torqueEMA[0] = (1 - at) * this.torqueEMA[0] + at * tx * inv;
+        this.torqueEMA[1] = (1 - at) * this.torqueEMA[1] + at * ty * inv;
+        this.torqueEMA[2] = (1 - at) * this.torqueEMA[2] + at * tz * inv;
       }
     }
   }

@@ -192,12 +192,22 @@ async function main() {
       if (flowRenderer && aero.flow) flowRenderer.update(aero.flow);
       const f = aero.force;
 
-      // Free flight: integrate the full aero force + gravity on all axes, then
-      // feed the resulting velocity back into the solver so the creature feels
-      // its own motion (e.g. the upward wind of a fall). Throttle is thrust (N).
+      // Free flight: integrate aero force + gravity, feed velocity back so
+      // the creature feels its own motion (fall → upward wind, etc.).
       if (flight.enabled) {
-        const px = flight.x, py = flight.y, pz = flight.z;   // pre-step position
-        flight.update(dt, f, aero.torque, flight.throttle);
+        const px = flight.x, py = flight.y, pz = flight.z;
+
+        // Scale LBM torque way down: moment-arm × force noise is large.
+        // Stabilizer PD controller targets identity orientation (wings level).
+        const TORQUE_SCALE = 0.12;
+        const [qx, qy, qz] = flight.q;
+        const Kp = 8, Kd = 3;
+        const tq = [
+          aero.torque[0] * TORQUE_SCALE + (stabOn ? -Kp * qx - Kd * flight.omega[0] : 0),
+          aero.torque[1] * TORQUE_SCALE + (stabOn ? -Kp * qy - Kd * flight.omega[1] : 0),
+          aero.torque[2] * TORQUE_SCALE + (stabOn ? -Kp * qz - Kd * flight.omega[2] : 0),
+        ];
+        flight.update(dt, f, tq);
         aero.setVelocity(flight.velocity());                 // close the loop
         if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
         if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
@@ -371,10 +381,8 @@ function spawnRandom(sim, matId) {
 function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit) {
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
-  let aeroSpeed = 8, flowOn = true, aoaDeg = 15;
-  // Wind boost: a gust vector folded into the LBM's ambient world wind. Cleanly
-  // separable — the inlet is worldWind + boost − v_creature — so it kicks the
-  // creature mid-flight without touching thrust or restarting the sim.
+  let flowOn = true, aoaDeg = 15;
+  // Wind boost: added to the LBM world-wind inlet. Cleanly separable.
   let windOn = false, windMag = 10, windDir = [0, 0, -1];
   function _worldWind() {
     if (!windOn) return [0, 0, 0];
@@ -383,6 +391,9 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     return [(x / len) * windMag, (y / len) * windMag, (z / len) * windMag];
   }
   function _pushWind() { if (aero) aero.setWorldWind(_worldWind()); }
+
+  // Active stabilizer: PD controller targeting identity orientation (level flight).
+  let stabOn = false;
   // Camera state captured when entering SIMULATE, restored when leaving — the
   // chase camera moves the eye during flight, so both eye and target must be
   // put back or you'd return to WORLD staring in from wherever the bird ended up.
@@ -448,24 +459,30 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
       ? { N_MAX: hasWings ? 80 : 64, N_SUB: [5, 3, 2] }
       : { N_MAX: hasWings ? 40 : 32, N_MIN: 12, N_SUB: [3, 2, 1] };
 
-    // Remember where the WORLD/BUILD camera was so we can return to it on exit.
+    // Remember the pre-sim camera so we can restore it on exit.
     if (orbit) _savedCam = {
       px: cam.position.x, py: cam.position.y, pz: cam.position.z,
       tx: orbit.target.x, ty: orbit.target.y, tz: orbit.target.z,
     };
-    // Lock the launch position at the creature's current built X/Z, ground level.
     const lx = builder?.root.position.x ?? DOM / 2;
     const lz = builder?.root.position.z ?? DOM / 2;
-    flight.throttle = aeroSpeed;
-    flight.setLaunch(lx, 0, lz);   // also seeds vz = throttle
-    const mb = measureCreature(parts);
-    flight.setCreatureExtent(mb.W, mb.H, mb.L);
-    if (builder) { builder.root.visible = true; builder.root.position.set(lx, 0, lz); }
-    if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(lx, 0, lz);
-    if (orbit) orbit.target.set(lx, 0, lz);   // camera watches the launch point
 
-    aero.start(parts, gridOpts).then((where) => {
-      aero.setVelocity(flight.enabled ? flight.velocity() : [0, 0, aeroSpeed]);
+    // Measure the creature's bounding box (parts are relative to root at y=0).
+    const mb = measureCreature(parts);
+    // Raise the creature so its lowest point sits on the y=0 ground plane.
+    const groundY = Math.max(0, -(mb.min[1] ?? 0));
+    flight.setLaunch(lx, groundY, lz);
+    flight.setCreatureExtent(mb.W, mb.H, mb.L);
+
+    if (builder) { builder.root.visible = true; builder.root.position.set(lx, groundY, lz); }
+    if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(lx, groundY, lz);
+    if (orbit) orbit.target.set(lx, groundY, lz);
+
+    // Re-extract parts from the raised position for the LBM.
+    const simParts = AeroController.partsFromBuilder(builder, THREE);
+    aero.start(simParts, gridOpts).then((where) => {
+      aero.setVelocity(flight.enabled ? flight.velocity() : [0, 0, 0]);
+      _pushWind();
       const st = aero.stats;
       if (info && st) {
         info.innerHTML = `Running on <b>${where}</b> · ${st.totalCells.toLocaleString()} cells · ` +
@@ -501,15 +518,6 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   }
 
   /* SIMULATE panel controls */
-  const spdEl = document.getElementById('aero-speed');
-  spdEl?.addEventListener('input', e => {
-    aeroSpeed = +e.target.value;
-    document.getElementById('aero-spd-val').textContent = aeroSpeed;
-    flight.throttle = aeroSpeed;
-    // In free flight the tick loop drives the solver from the creature's true
-    // velocity; only set the inlet directly in fixed wind-tunnel mode.
-    if (aero?.active && !flight.enabled) aero.setVelocity([0, 0, aeroSpeed]);
-  });
   const flowBtn = document.getElementById('btn-flow');
   flowBtn?.addEventListener('click', () => {
     flowOn = !flowOn;
@@ -570,21 +578,28 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     flyBtn.classList.toggle('on', flight.enabled);
     flyBtn.textContent = 'Free flight: ' + (flight.enabled ? 'on' : 'off');
     if (!flight.enabled) {
-      // Park back at launch position for wind-tunnel mode; the solver inlet
-      // reverts to a fixed forward stream.
       flight.reset();
-      if (builder) builder.root.position.set(flight.x, flight.y, flight.z);
+      if (builder) {
+        builder.root.position.set(flight.x, flight.y, flight.z);
+        builder.root.quaternion.set(0, 0, 0, 1);
+      }
       if (flowRenderer && flowRenderer.obj) flowRenderer.obj.position.set(flight.x, flight.y, flight.z);
-      if (aero?.active) aero.setVelocity([0, 0, aeroSpeed]);
-      // Re-frame the parked creature from the saved pre-sim eye position.
+      if (aero?.active) aero.setVelocity([0, 0, 0]);
       if (orbit) {
         if (_savedCam) cam.position.set(_savedCam.px, _savedCam.py, _savedCam.pz);
         orbit.target.set(flight.x, flight.y, flight.z);
       }
     } else if (aero?.active) {
-      // Re-enabling: hand the solver back the creature's live velocity.
       aero.setVelocity(flight.velocity());
     }
+  });
+
+  /* Active stabilizer toggle. */
+  const stabBtn = document.getElementById('btn-stab');
+  stabBtn?.addEventListener('click', () => {
+    stabOn = !stabOn;
+    stabBtn.classList.toggle('on', stabOn);
+    stabBtn.textContent = 'Stabilizer: ' + (stabOn ? 'on' : 'off');
   });
 
   /* ── Material selector ─────────────────────────────────────── */
