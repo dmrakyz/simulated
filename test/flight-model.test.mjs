@@ -66,11 +66,20 @@ console.log('\n[flight] full 3-axis force vector + velocity feedback');
   check('lateral force moves x', m.x > 0.05, `x=${m.x.toFixed(3)}`);
   check('lateral force builds vx', m.vx > 0.05, `vx=${m.vx.toFixed(3)}`);
 
-  // Throttle drives forward (z) motion and is exposed on velocity().
+  // Throttle is a forward THRUST force (N) along the body axis — it builds
+  // forward speed over time (residual damping caps it), not an instant set.
   m.reset();
-  m.update(1 / 60, [0, W, 0], null, 10);
-  check('throttle sets forward speed', Math.abs(m.velocity()[2] - 10) < 1e-9, `vz=${m.vz}`);
+  for (let i = 0; i < 120; i++) m.update(1 / 60, [0, W, 0], null, 12);
+  check('thrust builds forward speed', m.velocity()[2] > 0.5, `vz=${m.vz.toFixed(2)}`);
   check('velocity() returns the 3-vector fed back to the solver', m.velocity().length === 3);
+
+  // Thrust follows the body forward axis: pitching the nose redirects it, so
+  // forward run is traded for climb instead of horizontal speed being held.
+  m.reset();
+  m.q = [Math.sin(Math.PI / 8), 0, 0, Math.cos(Math.PI / 8)]; // pitch about x
+  const fwdP = m.forward();
+  check('thrust axis follows body orientation', Math.abs(fwdP[1]) > 0.5 && fwdP[2] < 0.99,
+    `fwd=[${fwdP.map(v => v.toFixed(2)).join(',')}]`);
 
   // Stall + no lift → it accelerates downward; that −vy is what becomes the
   // upward relative wind the solver feels ("the wind of its falling").

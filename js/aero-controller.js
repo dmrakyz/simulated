@@ -24,6 +24,7 @@ export class AeroController {
     this.stats = null;
     this.tickMs = 0;
     this._vel = [0, 0, 0];
+    this._wind = [0, 0, 0];   // ambient world wind (persists across restarts)
   }
 
   /** Begin simulating the given creature parts. Returns 'worker' | 'main'. */
@@ -48,6 +49,7 @@ export class AeroController {
       this.worker = worker;
       this.isWorker = true;
       this.active = true;
+      this.setWorldWind(this._wind);   // re-apply any wind set before start
       return 'worker';
     } catch (e) {
       console.warn('Aero worker unavailable — running on main thread:', e.message);
@@ -55,6 +57,7 @@ export class AeroController {
       this.stats = this.sim.stats();
       this.isWorker = false;
       this.active = true;
+      this.setWorldWind(this._wind);
       return 'main';
     }
   }
@@ -68,6 +71,14 @@ export class AeroController {
   setVelocity(v) {
     this._vel = v.slice();
     if (this.isWorker && this.active) this.worker.postMessage({ cmd: 'vel', v });
+  }
+
+  /** Set the ambient world wind (m/s) feeding the Galilean inlet (incl. gusts). */
+  setWorldWind(w) {
+    this._wind = w.slice();
+    if (!this.active) return;
+    if (this.isWorker) this.worker.postMessage({ cmd: 'wind', w });
+    else if (this.sim) this.sim.setWorldWind(w);
   }
 
   /** Main-thread fallback advance (no-op under the worker). Call once/frame. */

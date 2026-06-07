@@ -11,6 +11,7 @@
  *   { cmd:'init',  parts, gridOpts }
  *   { cmd:'parts', parts }          // articulated pose / new creature
  *   { cmd:'vel',   v:[x,y,z] }      // creature world velocity
+ *   { cmd:'wind',  w:[x,y,z] }      // ambient world wind (incl. gust boost)
  *   { cmd:'pause' } / { cmd:'resume' }
  * Protocol (worker → main):
  *   { type:'ready', stats }
@@ -22,6 +23,7 @@ import { MultiLevelLBM } from './lbm/multi-level.js';
 let sim = null;
 let running = false;
 let velocity = [0, 0, 0];
+let worldWind = [0, 0, 0];
 
 // Physics runs at most at TARGET_HZ. This is the primary battery knob: running
 // at 15 Hz instead of 30 Hz halves the CPU energy spent with no visible
@@ -70,6 +72,7 @@ function loop() {
   if (!running || !sim) return;
   const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   sim.setCreatureVelocity(velocity);
+  sim.setWorldWind(worldWind);
   sim.step();
   const tickMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
 
@@ -99,6 +102,7 @@ self.onmessage = (e) => {
         break;
       case 'parts': if (sim) sim.setCreatureParts(d.parts); break;
       case 'vel':   velocity = d.v.slice(); break;
+      case 'wind':  worldWind = d.w.slice(); break;
       case 'pause': running = false; break;
       case 'resume': if (!running) { running = true; loop(); } break;
     }

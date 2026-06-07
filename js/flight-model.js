@@ -11,7 +11,10 @@
  *   ω += α·dt  (rotational damping + cap)
  *   q = normalize(q + 0.5 · q⊗ω̃ · dt)  (quaternion integration)
  *
- * Forward speed (z) is throttle-held; set throttle to drive forward airspeed.
+ * Throttle is a forward THRUST force (N) applied along the body's current
+ * forward axis (local +z rotated by the orientation quaternion) — not a
+ * velocity target. Aerodynamic drag limits top speed, and pitching the nose
+ * up trades forward speed for climb instead of magically holding airspeed.
  * `update(dt, force, torque, throttleZ)` is backward-compatible: a scalar
  * force is treated as vertical lift [0, lift, 0]; null torque skips rotation.
  *
@@ -57,7 +60,8 @@ export class FlightModel {
 
   reset() {
     this.x = this._lx; this.y = this._ly; this.z = this._lz;
-    this.vx = 0; this.vy = 0; this.vz = this.throttle;
+    // Starts at rest; forward velocity builds up from integrated thrust.
+    this.vx = 0; this.vy = 0; this.vz = 0;
     // Orientation as quaternion [x, y, z, w] — identity = no rotation.
     this.q = [0, 0, 0, 1];
     // Angular velocity in world frame (rad/s).
@@ -72,28 +76,48 @@ export class FlightModel {
   /** Current orientation as a Three.js-compatible quaternion [x,y,z,w]. */
   quaternion() { return this.q.slice(); }
 
+  /** Body-frame forward axis (local +z) rotated into the world by orientation. */
+  forward() {
+    const [x, y, z, w] = this.q;
+    return [
+      2 * (x * z + w * y),
+      2 * (y * z - w * x),
+      1 - 2 * (x * x + y * y),
+    ];
+  }
+
   /**
    * Advance by dt seconds.
    *   force     aerodynamic force (N) in world frame. Scalar → [0, lift, 0].
    *   torque    aerodynamic torque (N·m) in world frame. null skips rotation.
-   *   throttleZ commanded forward airspeed (m/s). Omit to hold current vz.
+   *   throttleZ commanded forward thrust (N). Omit to hold current thrust.
    */
   update(dt, force, torque = null, throttleZ = undefined) {
     if (!this.enabled) return this.y;
     const t = Math.min(dt, 0.05);
 
+    if (throttleZ !== undefined) this.throttle = throttleZ;
+
     // ── Linear ──────────────────────────────────────────────────
+    const m  = this.mass;
     const fx = Array.isArray(force) ? (force[0] || 0) : 0;
     const fy = Array.isArray(force) ? (force[1] || 0) : (force || 0);
+    const fz = Array.isArray(force) ? (force[2] || 0) : 0;
 
-    this.vx += (fx / this.mass) * t;
-    this.vy += (fy / this.mass - this.g) * t;
+    // Throttle is a thrust FORCE along the body's forward axis, integrated like
+    // any other force — so drag (carried in the aero force) sets the top speed
+    // and pitching the nose redirects thrust between forward run and climb.
+    const fwd = this.forward();
+    const T = this.throttle;
+    this.vx += (fx / m + (fwd[0] * T) / m) * t;
+    this.vy += (fy / m + (fwd[1] * T) / m - this.g) * t;
+    this.vz += (fz / m + (fwd[2] * T) / m) * t;
     this.vx -= this.damp * this.vx * t;
     this.vy -= this.damp * this.vy * t;
+    this.vz -= this.damp * this.vz * t;
     this.vx = clamp(this.vx, -this.maxRate, this.maxRate);
     this.vy = clamp(this.vy, -this.maxRate, this.maxRate);
-
-    if (throttleZ !== undefined) { this.throttle = throttleZ; this.vz = throttleZ; }
+    this.vz = clamp(this.vz, -this.maxRate, this.maxRate);
 
     this.x += this.vx * t;
     this.y += this.vy * t;

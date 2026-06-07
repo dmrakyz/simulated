@@ -69,6 +69,28 @@ console.log('\n[force] net force responds to creature motion');
   console.log(`    |F| still=${mag0.toExponential(2)}N  moving=${mag1.toExponential(2)}N`);
 }
 
+console.log('\n[wind] world wind drives a force on a still creature (gust boost)');
+{
+  // A still creature in still air → ~no force. The same still creature in an
+  // imposed world wind → a real aerodynamic force, even though it never moves.
+  // This is the Galilean inlet = worldWind − v_creature; with v=0 the gust is
+  // the entire signal. Equivalent to moving the creature through still air.
+  const calm = new MultiLevelLBM(bird, { gridOpts: { N_MAX: 32, N_MIN: 12 } });
+  for (let f = 0; f < 30; f++) calm.step();
+  const magCalm = Math.hypot(...calm.netForce());
+
+  const gust = new MultiLevelLBM(bird, { gridOpts: { N_MAX: 32, N_MIN: 12 } });
+  gust.setWorldWind([0, 0, -6]); // 6 m/s headwind, creature stationary
+  for (let f = 0; f < 40; f++) gust.step();
+  const fGust = gust.netForce();
+  const magGust = Math.hypot(...fGust);
+
+  check('still creature in still air → ~no force', magCalm < magGust, `calm=${magCalm.toExponential(2)}`);
+  check('world wind alone produces a force (gust kicks the creature)', magGust > 0, `gust=${magGust.toExponential(2)} N`);
+  check('gust force is finite', Number.isFinite(magGust));
+  console.log(`    |F| calm=${magCalm.toExponential(2)}N  gust=${magGust.toExponential(2)}N`);
+}
+
 console.log('\n[mask] articulated pose rebuild');
 {
   const before = sim.mask.count;

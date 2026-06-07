@@ -57,6 +57,10 @@ export class MultiLevelLBM {
     // Smoothed Galilean far-field velocity (m/s) to suppress acoustic ringing.
     this.uSmooth = [0, 0, 0];
     this.vCreature = [0, 0, 0];
+    // Ambient world wind (m/s, world frame). The far-field flow the creature
+    // sees is worldWind − vCreature, so a fall, drift, or imposed gust all show
+    // up correctly in the inlet. Default still air.
+    this.worldWind = [0, 0, 0];
     // EMA-smoothed body force (lattice units) — kills frame-to-frame jitter in
     // the displayed lift/drag without lagging perceptibly.
     this.forceEMA = [0, 0, 0];
@@ -69,14 +73,26 @@ export class MultiLevelLBM {
     buildMask(this.mask, parts, this.fag.desc.origin, this.fag.dx);
   }
 
-  /** Set the creature's world velocity; the frame inlet is −v (smoothed). */
+  /** Set the creature's world velocity; the frame inlet is worldWind − v. */
   setCreatureVelocity(v) { this.vCreature = v.slice(); }
 
-  /** Convert a physical velocity (m/s) to a level's lattice velocity. */
+  /**
+   * Set the ambient world wind (m/s, world frame). Added on top of the Galilean
+   * transform so the inlet becomes worldWind − v_creature. A wind-boost gust is
+   * just a vector folded into this — it kicks the creature through the same
+   * aerodynamic force path, no special casing.
+   */
+  setWorldWind(w) { this.worldWind = w.slice(); }
+
+  /**
+   * Convert the smoothed far-field velocity (m/s) to a level's lattice velocity.
+   * `uSmooth` already tracks (v_creature − worldWind), so negating it yields the
+   * physical inlet worldWind − v_creature.
+   */
   toLatticeVel(level, vPhys) {
     const { dt } = level.sound;
     const s = dt / level.dx;
-    return [-vPhys[0] * s, -vPhys[1] * s, -vPhys[2] * s]; // inlet = −v_creature
+    return [-vPhys[0] * s, -vPhys[1] * s, -vPhys[2] * s];
   }
 
   /**
@@ -85,8 +101,12 @@ export class MultiLevelLBM {
    * once per frame (sufficient for a game; error is O(Δt_frame)).
    */
   step() {
-    // Smooth the frame's far-field velocity.
-    for (let a = 0; a < 3; a++) this.uSmooth[a] = 0.95 * this.uSmooth[a] + 0.05 * this.vCreature[a];
+    // Smooth the frame's far-field velocity. Track (v_creature − worldWind) so
+    // toLatticeVel's negation gives the physical inlet worldWind − v_creature.
+    for (let a = 0; a < 3; a++) {
+      const target = this.vCreature[a] - this.worldWind[a];
+      this.uSmooth[a] = 0.95 * this.uSmooth[a] + 0.05 * target;
+    }
 
     // Run coarsest → finest so coarse state is ready to feed finer inlets.
     for (let lv = this.levels.length - 1; lv >= 0; lv--) {

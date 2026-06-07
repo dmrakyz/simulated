@@ -194,7 +194,7 @@ async function main() {
 
       // Free flight: integrate the full aero force + gravity on all axes, then
       // feed the resulting velocity back into the solver so the creature feels
-      // its own motion (e.g. the upward wind of a fall). Throttle holds airspeed.
+      // its own motion (e.g. the upward wind of a fall). Throttle is thrust (N).
       if (flight.enabled) {
         const px = flight.x, py = flight.y, pz = flight.z;   // pre-step position
         flight.update(dt, f, aero.torque, flight.throttle);
@@ -372,6 +372,17 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
   let aeroSpeed = 8, flowOn = true, aoaDeg = 15;
+  // Wind boost: a gust vector folded into the LBM's ambient world wind. Cleanly
+  // separable — the inlet is worldWind + boost − v_creature — so it kicks the
+  // creature mid-flight without touching thrust or restarting the sim.
+  let windOn = false, windMag = 10, windDir = [0, 0, -1];
+  function _worldWind() {
+    if (!windOn) return [0, 0, 0];
+    const [x, y, z] = windDir;
+    const len = Math.hypot(x, y, z) || 1;
+    return [(x / len) * windMag, (y / len) * windMag, (z / len) * windMag];
+  }
+  function _pushWind() { if (aero) aero.setWorldWind(_worldWind()); }
   // Camera state captured when entering SIMULATE, restored when leaving — the
   // chase camera moves the eye during flight, so both eye and target must be
   // put back or you'd return to WORLD staring in from wherever the bird ended up.
@@ -506,6 +517,29 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
     flowBtn.textContent = 'Flow lines: ' + (flowOn ? 'on' : 'off');
     if (flowRenderer) flowRenderer.setVisible(flowOn && mode === 'simulate' && aero.active);
   });
+
+  /* Wind boost: toggle + gust strength/direction. Just feeds the world wind. */
+  const windBtn = document.getElementById('btn-wind');
+  windBtn?.addEventListener('click', () => {
+    windOn = !windOn;
+    windBtn.classList.toggle('on', windOn);
+    windBtn.textContent = 'Wind boost: ' + (windOn ? 'on' : 'off');
+    const wc = document.getElementById('wind-controls');
+    if (wc) wc.style.display = windOn ? '' : 'none';
+    _pushWind();
+  });
+  document.getElementById('wind-mag')?.addEventListener('input', e => {
+    windMag = +e.target.value;
+    document.getElementById('wind-mag-val').textContent = windMag;
+    _pushWind();
+  });
+  for (const [id, axis] of [['wind-dx', 0], ['wind-dy', 1], ['wind-dz', 2]]) {
+    document.getElementById(id)?.addEventListener('input', e => {
+      windDir[axis] = +e.target.value;
+      document.getElementById(id + '-val').textContent = windDir[axis].toFixed(1);
+      _pushWind();
+    });
+  }
 
   const aoaEl = document.getElementById('aero-aoa');
   aoaEl?.addEventListener('input', e => {
