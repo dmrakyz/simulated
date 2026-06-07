@@ -156,9 +156,14 @@ async function main() {
   try { flowRenderer = new FlowRenderer(THREE, scene); flowRenderer.setVisible(false); }
   catch (e) { console.warn('Flow renderer unavailable:', e.message); }
 
+  // Active-stabilizer toggle: a shared mutable cell so tick() (here, in main's
+  // closure) and the button handler (in wireUI's closure) see the same value —
+  // a plain `let` would be scoped to whichever function declared it.
+  const stab = { on: false };
+
   /* 13 ─ Wire UI input */
   { const r = ldStep('Wiring UI events…');
-    try { wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit); ldOk(r); }
+    try { wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit, stab); ldOk(r); }
     catch (e) { ldWarn(r, 'UI warning: ' + e.message); } }
 
   /* 14 ─ Start! */
@@ -203,9 +208,9 @@ async function main() {
         const [qx, qy, qz] = flight.q;
         const Kp = 8, Kd = 3;
         const tq = [
-          aero.torque[0] * TORQUE_SCALE + (stabOn ? -Kp * qx - Kd * flight.omega[0] : 0),
-          aero.torque[1] * TORQUE_SCALE + (stabOn ? -Kp * qy - Kd * flight.omega[1] : 0),
-          aero.torque[2] * TORQUE_SCALE + (stabOn ? -Kp * qz - Kd * flight.omega[2] : 0),
+          aero.torque[0] * TORQUE_SCALE + (stab.on ? -Kp * qx - Kd * flight.omega[0] : 0),
+          aero.torque[1] * TORQUE_SCALE + (stab.on ? -Kp * qy - Kd * flight.omega[1] : 0),
+          aero.torque[2] * TORQUE_SCALE + (stab.on ? -Kp * qz - Kd * flight.omega[2] : 0),
         ];
         flight.update(dt, f, tq);
         aero.setVelocity(flight.velocity());                 // close the loop
@@ -379,7 +384,7 @@ function spawnRandom(sim, matId) {
 /* ══════════════════════════════════════════════════════════════════
    UI event wiring
    ══════════════════════════════════════════════════════════════════ */
-function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit) {
+function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, orbit, stab) {
   const DOM = sim.DOMAIN;
   let activeMat = 0, spawnSize = 1.5, mode = 'world';
   let flowOn = true, aoaDeg = 15;
@@ -393,8 +398,8 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   }
   function _pushWind() { if (aero) aero.setWorldWind(_worldWind()); }
 
-  // Active stabilizer: PD controller targeting identity orientation (level flight).
-  let stabOn = false;
+  // Active stabilizer: PD controller targeting identity orientation (level
+  // flight). State lives in the `stab` cell shared with main()'s tick loop.
   // Camera state captured when entering SIMULATE, restored when leaving — the
   // chase camera moves the eye during flight, so both eye and target must be
   // put back or you'd return to WORLD staring in from wherever the bird ended up.
@@ -608,9 +613,9 @@ function wireUI(THREE, sim, cam, tapMesh, builder, aero, flowRenderer, flight, o
   /* Active stabilizer toggle. */
   const stabBtn = document.getElementById('btn-stab');
   stabBtn?.addEventListener('click', () => {
-    stabOn = !stabOn;
-    stabBtn.classList.toggle('on', stabOn);
-    stabBtn.textContent = 'Stabilizer: ' + (stabOn ? 'on' : 'off');
+    stab.on = !stab.on;
+    stabBtn.classList.toggle('on', stab.on);
+    stabBtn.textContent = 'Stabilizer: ' + (stab.on ? 'on' : 'off');
   });
 
   /* ── Material selector ─────────────────────────────────────── */
